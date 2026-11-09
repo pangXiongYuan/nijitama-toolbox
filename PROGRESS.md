@@ -231,9 +231,10 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 2. `git add -A` → `git commit -m "..."` → `git tag -f vX.Y.Z`
 3. `git push origin main` → `git push -f origin vX.Y.Z`
 4. 建 Release，内容抄 CHANGELOG 对应版本
-5. 打包 → 两个 zip 传到 Release，**文件名固定不带版本号**：
-   - `nijitama-toolbox-full.zip`：整个 `dist/nijitama-toolbox/`（约 86 MB，含运行环境）
-   - `nijitama-toolbox-update.zip`：只放 exe（约 3 MB，覆盖旧 exe 即更新）
-   - 名字不变，所以每次发版要么先删旧附件再传，要么用 API 改附件名
+5. 打包 → 两个 zip 传到 Release，**文件名带版本号**：
+   - `nijitama-toolbox-vX.Y.Z-full.zip`：整个 `dist/nijitama-toolbox/`（约 86 MB，含运行环境）
+   - `nijitama-toolbox-vX.Y.Z-update.zip`：只放 exe（约 3 MB，覆盖旧 exe 即更新）
+   - 下载页提示写「第一次用下带 full 的，更新下带 update 的」，提示本身不带版本号，
+     这样每次发版只换文件、不用改文案
 
 `profile/`、`data/`、`steps/` 已在 `.gitignore` 里，别解开。

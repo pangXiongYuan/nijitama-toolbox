@@ -35,12 +35,14 @@ Python + PySide6 做界面，Playwright 通过 CDP 驱动真实 Chrome 操作游
 
 不想自己装 Python 和依赖，去 [Releases](https://github.com/pangXiongYuan/nijitama-toolbox/releases/latest) 下：
 
-| 文件 | 什么时候用 |
-|---|---|
-| `nijitama-toolbox-full.zip` | **第一次用**。约 86 MB，含运行环境，解压即用 |
-| `nijitama-toolbox-update.zip` | **已经装过旧版**。约 3 MB，只有 exe，覆盖旧的就行 |
+**第一次使用请下载带 `full` 的；更新请下载带 `update` 的。**
 
-两个包的文件名不带版本号，永远指向最新版；具体是哪个版本看 Release 标题。
+| 文件名 | 用途 |
+|---|---|
+| `nijitama-toolbox-v1.5.0-full.zip` | 第一次用。约 86 MB，含运行环境，解压即用 |
+| `nijitama-toolbox-v1.5.0-update.zip` | 已经装过旧版。约 3 MB，只有 exe，覆盖旧的就行 |
+
+版本号会随版本变，认 `full` / `update` 就行。
 
 - 全量包：解压后双击 `nijitama-toolbox.exe`，不用装 Python 和依赖
 - 更新包：解压出 `nijitama-toolbox.exe`，覆盖原来那个即可，
