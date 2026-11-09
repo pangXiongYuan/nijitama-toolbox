@@ -45,6 +45,8 @@ nijitama-farm/
 ├── _bootstrap.py    让 Python 找到 playwright（Store 版必须，有副作用）
 ├── CHANGELOG.md     版本历史（每次必更新）
 ├── PROGRESS.md      本文件
+├── README.md        GitHub 首页说明
+├── LICENSE          MIT
 ├── 功能说明.md       功能清单（给用户看，同步到 docs/）
 ├── assets/          app.ico / app.png / banner.png / keyvisual.jpg / icons/
 ├── docs/            使用说明.txt（用户自己维护！）/ 功能说明.md
