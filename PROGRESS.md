@@ -177,8 +177,7 @@ nijitama-farm/
 ```powershell
 cd D:\Documents\deepseek-harness\default-workspace\nijitama-farm
 
-# 语法检查
-python -m py_compile app.py worker.py farmcore.py gamebot.py config.py paths.py version.py docwatch.py
+# 语法检查python -m py_compile app.py worker.py farmcore.py gamebot.py config.py paths.py version.py docwatch.py
 
 # 源码运行
 python app.py
@@ -218,3 +217,19 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 - [ ] 战斗失败/撤退检测
 - [ ] 多套关卡配置
 - [ ] 掉落物品名映射
+
+---
+
+## 十一、GitHub
+
+仓库：https://github.com/pangXiongYuan/nijitama-toolbox （MIT）
+
+**发版流程**：
+
+1. 改 `version.py` → 写 CHANGELOG → 同步 `功能说明.md`
+   （根目录和 `docs/` 是两份副本，**都要改**）
+2. `git add -A` → `git commit -m "..."` → `git tag -f vX.Y.Z`
+3. `git push origin main` → `git push -f origin vX.Y.Z`
+4. 建 Release，内容抄 CHANGELOG 对应版本
+
+`profile/`、`data/`、`steps/` 已在 `.gitignore` 里，别解开。
