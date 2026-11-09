@@ -1,10 +1,23 @@
 # にじたま 工具箱（nijitama-toolbox）
 
-自动刷《にじたま》（魂これ / tamacolle）副本的 Windows 桌面工具。
+自动刷《にじたま》（魂これ / tamacolle / 地魂男儿）副本的 Windows 桌面工具。
 Python + PySide6 做界面，Playwright 通过 CDP 驱动真实 Chrome 操作游戏。
 
 **核心原则：战斗全程不干预。** 脚本只在「任務報告書」出现后点一次「承認する」，
 然后选「続けて任務へ」回到选关，按设定间隔开下一轮。
+
+## English
+
+A Windows desktop tool that automates stage farming in *Nijitama* (魂これ / Tamacolle / 地魂男儿).
+
+It drives your real Chrome over CDP and reads the game's Cocos node tree instead of doing
+image recognition — battles run untouched, and the script only clicks 「承認する」 after the
+mission report appears.
+
+- Python + PySide6; the UI is currently Chinese only
+- 净化巡历 (built-in stages) and 曜日任務 (stages rotated daily)
+- Compatible with community Chinese translation userscripts
+- Prebuilt `full` package on [Releases](https://github.com/pangXiongYuan/nijitama-toolbox/releases/latest) — no Python required
 
 ## 功能
 
