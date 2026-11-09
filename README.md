@@ -31,6 +31,17 @@ Python + PySide6 做界面，Playwright 通过 CDP 驱动真实 Chrome 操作游
 - 系统里装有 Chrome 或 Edge
 - Python 3.10+
 
+## 下载
+
+不想自己装 Python 和依赖，直接去 [Releases](https://github.com/pangXiongYuan/nijitama-toolbox/releases/latest) 下全量包：
+
+| 文件 | 说明 |
+|---|---|
+| `nijitama-toolbox-v1.5.0-full.zip` | 免安装版，约 86 MB，解压即用 |
+
+解压后双击 `nijitama-toolbox.exe` 就行，不用装 Python 和依赖。
+运行生成的 `profile/`、`data/`、`steps/` 都在 exe 旁边。
+
 ## 快速开始
 
 ```powershell

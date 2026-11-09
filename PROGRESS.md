@@ -231,5 +231,7 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 2. `git add -A` → `git commit -m "..."` → `git tag -f vX.Y.Z`
 3. `git push origin main` → `git push -f origin vX.Y.Z`
 4. 建 Release，内容抄 CHANGELOG 对应版本
+5. 打包 → 把 `dist/nijitama-toolbox/` 压成 `nijitama-toolbox-vX.Y.Z-full.zip`
+   （约 86 MB，包含运行环境，解压即用）→ 上传到同名 Release
 
 `profile/`、`data/`、`steps/` 已在 `.gitignore` 里，别解开。
