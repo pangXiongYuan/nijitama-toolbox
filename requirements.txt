@@ -1,0 +1,14 @@
+# にじたま 工具箱 依赖
+# 安装：python -m pip install -r requirements.txt
+
+# 浏览器自动化（通过 CDP 驱动系统 Chrome/Edge）
+playwright>=1.40.0
+
+# 界面
+PySide6>=6.5.0
+
+# 生成 ICO 图标用（make_icon.py）
+Pillow>=10.0.0
+
+# 检查调试端口（cdp_alive）
+requests>=2.31.0

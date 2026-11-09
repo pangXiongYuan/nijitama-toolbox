@@ -1,0 +1,33 @@
+# ---- 运行时数据（绝对不能提交）----
+# Chrome 登录态，约 3.7 GB
+profile/
+# 配置、日志、文档留档
+data/
+# 出错截图
+steps/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---- 打包产物 ----
+build/
+dist/
+
+# ---- 一次性调试脚本 ----
+_diag_*.py
+
+# ---- 游戏素材（版权归官方，不入库）----
+assets/keyvisual.jpg
+assets/banner.png
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
