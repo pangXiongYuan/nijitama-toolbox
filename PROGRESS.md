@@ -229,7 +229,8 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 **发版流程**：
 
 1. 改 `version.py` → 写 CHANGELOG → 同步 `功能说明.md`
-   （根目录和 `docs/` 是两份副本，**都要改**）
+   （根目录和 `docs/` 是两份副本，**都要改**）→ README 的「更新日志」表加一行
+   （只留最近三版，最老的一行删掉）
 2. `git add -A` → `git commit -m "..."` → `git tag -f vX.Y.Z`
 3. `git push origin main` → `git push -f origin vX.Y.Z`
 4. 建 Release，内容抄 CHANGELOG 对应版本
