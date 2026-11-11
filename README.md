@@ -52,8 +52,8 @@ mission report appears.
 
 | 文件名 | 用途 |
 |---|---|
-| `nijitama-toolbox-v1.5.0-full.zip` | 第一次用。约 86 MB，含运行环境，解压即用 |
-| `nijitama-toolbox-v1.5.0-update.zip` | 已经装过旧版。约 3 MB，只有 exe，覆盖旧的就行 |
+| `nijitama-toolbox-v1.5.1-full.zip` | 第一次用。约 86 MB，含运行环境，解压即用 |
+| `nijitama-toolbox-v1.5.1-update.zip` | 已经装过旧版。约 3 MB，只有 exe，覆盖旧的就行 |
 
 - 全量包：解压后双击 `nijitama-toolbox.exe`，不用装 Python 和依赖
 - 更新包：解压出 `nijitama-toolbox.exe`，覆盖原来那个即可，
