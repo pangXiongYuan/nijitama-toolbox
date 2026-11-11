@@ -122,7 +122,8 @@ class ListWorker(QThread):
                     return
 
                 def pick():
-                    return [{"texts": [c["title"], c["sub"]], "xy": None}
+                    return [{"texts": [c["title"], c["sub"]], "xy": None,
+                             "idx": c.get("idx")}
                             for c in g.weekday_cards()]
             else:
                 self._log("已在关卡选择，进入净化巡历（戦場列表）…")
@@ -138,8 +139,8 @@ class ListWorker(QThread):
                     return
 
                 def pick():
-                    return [{"texts": [c["title"], c["sub"]], "xy": None}
-                            for c in g.collect_all_cards()
+                    return [{"texts": [c["title"], c["sub"]], "xy": None, "idx": i}
+                            for i, c in enumerate(g.collect_all_cards())
                             if "戦場" in c.get("sub", "")]
 
             cards = []
@@ -173,7 +174,7 @@ class ListWorker(QThread):
                     continue
                 out.append({"title": str(texts[0]),
                             "sub": str(texts[1]) if len(texts) > 1 else "",
-                            "idx": len(out)})
+                            "idx": c.get("idx", len(out))})
             self._log(f"完成，共 {len(out)} 关")
             self.sig_done.emit(out, "")
         except Exception as e:

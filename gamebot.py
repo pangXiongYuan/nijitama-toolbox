@@ -1060,13 +1060,20 @@ class Game:
             x1, y1, x2, y2 = rect
             y_lo, y_hi = y1 + top_margin, y2 - bottom_margin
             x, y = xy
-            inside = (x1 + 30 <= x <= x2 - 30 and y_lo <= y <= y_hi)
+            # 贴边容忍：卡片中心只差几十像素、或列表已经到底滑不动时，
+            # 只要卡片还在视口里就把点击点钳进可用区（差 1px 不该算失败）
+            click_y = max(y_lo, min(y, y_hi))
+            near_edge = abs(y - click_y) <= 40 and y1 + 10 <= y <= y2 - 10
+            inside = (x1 + 30 <= x <= x2 - 30 and
+                      (y_lo <= y <= y_hi or near_edge))
             if inside:
                 # 点之前再确认一次没在滚（双保险）
                 self.wait_scroll_idle()
                 xy2 = self.card_xy(title, sub)
                 if xy2 and abs(xy2[0] - x) < 6 and abs(xy2[1] - y) < 6:
-                    return [x, y]
+                    if click_y != y:
+                        self.log(f"      卡片 y={y:.0f} 贴边，改点 y={click_y:.0f}")
+                    return [x, click_y]
                 continue
             self.log(f"      卡片 y={y:.0f} 不在可用区({y_lo:.0f}~{y_hi:.0f})，滑动")
             mid = (y_lo + y_hi) / 2
@@ -1165,13 +1172,16 @@ class Game:
         """
         out = []
         try:
-            for c in self.collect_all_cards():
+            # 序号按「全列表位置」记，和 click_card_smart 里的 cands 下标同一套，
+            # 否则两边一个过滤剧情关、一个不过滤，序号会错位
+            for i, c in enumerate(self.collect_all_cards()):
                 title = str(c.get("title", ""))
                 sub = str(c.get("sub", ""))
                 if "クリア条件" in sub:
                     continue
                 if self.WEEKDAY_RE.search(sub):
-                    out.append({"title": title, "sub": sub, "texts": [title, sub], "xy": None})
+                    out.append({"title": title, "sub": sub,
+                                "texts": [title, sub], "xy": None, "idx": i})
         except Exception:
             pass
         return out
@@ -1334,9 +1344,13 @@ class Game:
 
         if idx is not None and 0 <= idx < len(cands):
             c = cands[idx]
-            self.log(f"      按序号 #{idx} 定位: {c['title']} | {c['sub']}")
-            if self.enter_card_by_title(c["title"], c["sub"]):
-                return True
+            if "クリア条件" in (c.get("sub") or ""):
+                # 剧情关没有战斗，点进去只会播剧情；宁可失败也不要乱进
+                self.log(f"      序号 #{idx} 是剧情关（{c['title']} | {c['sub']}），不点")
+            else:
+                self.log(f"      按序号 #{idx} 定位: {c['title']} | {c['sub']}")
+                if self.enter_card_by_title(c["title"], c["sub"]):
+                    return True
 
         if cands:
             self.log(f"      没匹配上（最高 {best_score} 分），当前列表：")
