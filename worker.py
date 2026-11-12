@@ -346,15 +346,15 @@ class BotWorker(QThread):
                         self.sig_done.emit(f"未进入主页：{g.screens()}", 0)
                         return
                 status("进入关卡列表…")
-                if not g.to_stage_select():
+                if not g.to_stage_select(stop_check=self._stopped):
                     self.sig_done.emit(f"未进入关卡选择：{g.screens()}", 0)
                     return
             else:
                 log("已经在关卡选择界面，直接开始")
             if stage_type == "weekday":
-                g.open_weekday()
+                g.open_weekday(stop_check=self._stopped)
             else:
-                if not g.to_battle_list():
+                if not g.to_battle_list(stop_check=self._stopped):
                     self.sig_done.emit(f"未进入戦場列表：{g.screens()}", 0)
                     return
 
@@ -362,14 +362,17 @@ class BotWorker(QThread):
             while (target == 0 or done < target) and not self._stopped():
                 self.sig_progress.emit(done, target if target else done + 1)
 
-                if not farmcore.ensure_battle_list(g, log, stage_type):
+                if not farmcore.ensure_battle_list(g, log, stage_type,
+                                                   stop_check=self._stopped):
+                    if self._stopped():
+                        break
                     status("重新导航…")
-                    if not g.to_stage_select():
+                    if not g.to_stage_select(stop_check=self._stopped):
                         self.sig_done.emit("重新导航失败", done)
                         return
                     if stage_type == "weekday":
-                        g.open_weekday()
-                    elif not g.to_battle_list():
+                        g.open_weekday(stop_check=self._stopped)
+                    elif not g.to_battle_list(stop_check=self._stopped):
                         self.sig_done.emit("重新导航失败", done)
                         return
 
@@ -398,7 +401,10 @@ class BotWorker(QThread):
                     if fails >= 4:
                         self.sig_done.emit("连续失败过多，已停止", done)
                         return
-                    if not g.settle_to_list(force_refresh=True):
+                    if self._stopped():
+                        break
+                    if not g.settle_to_list(force_refresh=True, stage_type=stage_type,
+                                            stop_check=self._stopped):
                         self.sig_done.emit("恢复失败，已停止", done)
                         return
 

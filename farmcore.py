@@ -9,13 +9,15 @@ farmcore.py —— 与界面无关的刷本流程（供 GUI 和 CLI 共用）
 import time
 
 
-def ensure_battle_list(g, log, stage_type="junreki") -> bool:
-    """确保处在「关卡列表」上"""
+def ensure_battle_list(g, log, stage_type="junreki", stop_check=None) -> bool:
+    """确保处在「关卡列表」上（stop_check 为真时直接放弃）"""
+    if stop_check is not None and stop_check():
+        return False
     if not g.ui_active("StageSelect"):
         return False
 
     if stage_type == "weekday":
-        if not g.open_weekday():
+        if not g.open_weekday(stop_check=stop_check):
             return False
         return len(g.weekday_cards()) > 0
 
@@ -23,7 +25,7 @@ def ensure_battle_list(g, log, stage_type="junreki") -> bool:
     cards = g.js("__gt.cards()") or []
     if st.get("type") == 2 and len(cards) > 0:
         return True
-    return g.to_battle_list()
+    return g.to_battle_list(stop_check=stop_check)
 
 
 def run_once(g, idx: int, stage_title, stage_keywords, log,

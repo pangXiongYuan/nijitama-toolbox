@@ -836,7 +836,7 @@ class Game:
             return False
         return self.to_home()
 
-    def to_stage_select(self, tries=4, allow_reload=True):
+    def to_stage_select(self, tries=4, allow_reload=True, stop_check=None):
         """
         Home -> StageSelect。
         注意：只触发一次，然后耐心等 10 秒。
@@ -845,6 +845,8 @@ class Game:
         全部失败时怀疑页面卡死，自动重载一次再试。
         """
         for i in range(1, tries + 1):
+            if stop_check is not None and stop_check():
+                return False
             if self.ui_active("StageSelect"):
                 return True
             if not self.is_active(P_DEPART):
@@ -854,28 +856,33 @@ class Game:
             self.log(f"      出陣#{i} press={r.get('called')}")
             for _ in range(10):
                 self.page.wait_for_timeout(1000)
+                if stop_check is not None and stop_check():
+                    return False
                 if self.ui_active("StageSelect"):
                     return True
         if self.ui_active("StageSelect"):
             return True
-        if allow_reload:
+        if allow_reload and not (stop_check is not None and stop_check()):
             self.log("      出陣一直无响应（疑似游戏卡死），自动重载恢复")
             if self.reload_and_home():
-                return self.to_stage_select(tries=2, allow_reload=False)
+                return self.to_stage_select(tries=2, allow_reload=False,
+                                            stop_check=stop_check)
         return False
 
     # ---------- 副本列表 ----------
-    def _wait_card(self, keywords, timeout=25):
-        """等某张卡片出现"""
+    def _wait_card(self, keywords, timeout=25, stop_check=None):
+        """等某张卡片出现；stop_check 为真时立刻放弃"""
         t0 = time.time()
         while time.time() - t0 < timeout:
+            if stop_check is not None and stop_check():
+                return None
             card = self.js("(k)=>__gt.findCardXY(k)", list(keywords))
             if card:
                 return card
             self.page.wait_for_timeout(1000)
         return None
 
-    def to_battle_list(self, chapter_keyword="はじまりの旅"):
+    def to_battle_list(self, chapter_keyword="はじまりの旅", stop_check=None):
         """StageSelect -> 净化巡历 -> 章节 -> 戦闘 -> 戦場列表（带轮询与重试）"""
         # 已经在戦場列表就直接用，不要重新导航一遍
         try:
@@ -886,11 +893,13 @@ class Game:
             pass
 
         for attempt in range(1, 4):
+            if stop_check is not None and stop_check():
+                return False
             if self.ui_active("StageSelect"):
                 self.press(P_JUNREKI)
                 self.page.wait_for_timeout(2000)
 
-            card = self._wait_card([chapter_keyword], 25)
+            card = self._wait_card([chapter_keyword], 25, stop_check=stop_check)
             if not card:
                 self.log(f"      第{attempt}次：未找到章节卡片，screens={self.screens()}")
                 continue
@@ -917,6 +926,8 @@ class Game:
             # 等戦場列表出现
             t0 = time.time()
             while time.time() - t0 < 25:
+                if stop_check is not None and stop_check():
+                    return False
                 st = self.js("__gt.stageState()") or {}
                 cards = self.js("__gt.cards()") or []
                 if st.get("type") == 2 and len(cards) > 0:
@@ -1221,7 +1232,7 @@ class Game:
         except Exception:
             return False
 
-    def open_weekday(self):
+    def open_weekday(self, stop_check=None):
         """
         进入曜日任務关卡列表。
         注意：顶部菜单里也有个「曜日任務」按钮，它的文字会误判成关卡，
@@ -1230,6 +1241,8 @@ class Game:
         if not self.ui_active("StageSelect"):
             return False
         self.page.wait_for_timeout(1500)
+        if stop_check is not None and stop_check():
+            return False
 
         if self.weekday_ready():
             return True
@@ -1241,6 +1254,8 @@ class Game:
         self.log(f"      点曜日任務（press）: {r}")
         for _ in range(8):
             self.page.wait_for_timeout(1000)
+            if stop_check is not None and stop_check():
+                return False
             if self.weekday_ready():
                 self.log("      已进入曜日任務列表（press）")
                 return True
@@ -1250,6 +1265,8 @@ class Game:
         self.click(top, "曜日任務")
         for _ in range(8):
             self.page.wait_for_timeout(1000)
+            if stop_check is not None and stop_check():
+                return False
             if self.weekday_ready():
                 self.log("      已进入曜日任務列表（点击）")
                 return True
@@ -1281,6 +1298,8 @@ class Game:
                 self.page.mouse.click(xy[0], xy[1])
                 for _ in range(10):
                     self.page.wait_for_timeout(1000)
+                    if stop_check is not None and stop_check():
+                        return False
                     if self.weekday_ready():
                         self.log("      已进入曜日任務列表（入口卡片）")
                         return True
@@ -1293,6 +1312,8 @@ class Game:
                 self.page.mouse.click(hit["xy"][0], hit["xy"][1])
                 for _ in range(10):
                     self.page.wait_for_timeout(1000)
+                    if stop_check is not None and stop_check():
+                        return False
                     if self.weekday_ready():
                         self.log("      已进入曜日任務列表（文字兜底）")
                         return True
@@ -1880,17 +1901,27 @@ class Game:
 
         return self.ui_active("StageSelect")
 
-    def settle_to_list(self, max_tries=5, force_refresh=False):
+    def settle_to_list(self, max_tries=5, force_refresh=False,
+                       stage_type="junreki", stop_check=None):
         """
-        把游戏拉回「StageSelect 戦場列表」。
-        force_refresh=True 时，即使已在 StageSelect 也重走一遍净化巡历，
-        把滚动列表重建到顶部（应对滚动位置错乱导致点不中卡片）。
+        把游戏拉回「关卡列表」。
+        stage_type=weekday 时走曜日任務入口——以前这里固定跑净化巡历，
+        刷曜日任務时永远找不到「はじまりの旅」章节卡片，白等好几分钟。
+        force_refresh=True 时即使已在列表也重建一次（应对滚动位置错乱）。
+        stop_check 为真时立刻退出，别让用户按了停止还在那儿导航。
         """
+        def back_to_list():
+            if stage_type == "weekday":
+                return self.open_weekday(stop_check=stop_check)
+            return self.to_battle_list(stop_check=stop_check)
+
         for i in range(max_tries):
+            if stop_check is not None and stop_check():
+                return False
             if self.ui_active("StageSelect"):
                 if force_refresh:
                     self.log(f"      settle{i}: 强制刷新列表")
-                    if self.to_battle_list():
+                    if back_to_list():
                         return True
                     force_refresh = False
                     continue
@@ -1898,7 +1929,7 @@ class Game:
                 cards = self.js("__gt.cards()") or []
                 if st.get("type") == 2 and len(cards) > 0:
                     return True
-                if self.to_battle_list():
+                if back_to_list():
                     return True
                 continue
 
@@ -1911,7 +1942,7 @@ class Game:
             if bs.get("Result") or bs.get("Battle") or self.progress():
                 # 战斗/结算没走完 -> 交给 run_battle 正常跑完，绝不乱点
                 self.log(f"      settle{i}: 战斗流程未结束，交给 run_battle")
-                out = self.run_battle(timeout=1200)
+                out = self.run_battle(timeout=1200, stop_check=stop_check)
                 if out == "chapterend":
                     if self.choose_stay():
                         return True
@@ -1923,13 +1954,13 @@ class Game:
                 continue
             if bs.get("Home"):
                 self.log(f"      settle{i}: 从 Home 出发")
-                self.to_stage_select()
+                self.to_stage_select(stop_check=stop_check)
                 continue
 
             # 其它情况：尝试回 Home 再出发
             self.log(f"      settle{i}: screens={self.screens()} 尝试回 Home")
             self.to_home()
-            self.to_stage_select()
+            self.to_stage_select(stop_check=stop_check)
         return False
 
 
