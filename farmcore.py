@@ -30,13 +30,20 @@ def ensure_battle_list(g, log, stage_type="junreki", stop_check=None) -> bool:
 
 def run_once(g, idx: int, stage_title, stage_keywords, log,
              stop_check=None, stage_type="junreki", stage_sub="",
-             stage_idx=None) -> str:
+             stage_idx=None, pause_check=None) -> str:
     """
     跑一次副本。
-    返回 'ok' / 'failed' / 'shortage' / 'retry' / 'stopped'
+    返回 'ok' / 'failed' / 'shortage' / 'retry' / 'stopped' / 'paused'
     """
     def stopped():
         return stop_check is not None and stop_check()
+
+    def paused():
+        return pause_check is not None and pause_check()
+
+    # 暂停时不开新的一轮，直接交回上层等恢复
+    if paused():
+        return "paused"
 
     # 1) 进入关卡（汉化容忍：标题打分 + 序号兜底）
     if stage_type == "weekday":
@@ -68,6 +75,9 @@ def run_once(g, idx: int, stage_title, stage_keywords, log,
     if stopped():
         log(f"  [{idx}] 已停止（在编队界面）")
         return "stopped"
+    if paused():
+        log(f"  [{idx}] 已暂停（在编队界面，不点出阵）")
+        return "paused"
 
     # 2) 出阵
     sb = g.start_battle()
@@ -84,12 +94,15 @@ def run_once(g, idx: int, stage_title, stage_keywords, log,
     outcome = g.run_battle(
         timeout=1200,
         stop_check=stop_check,
+        pause_check=pause_check,
         on_tick=lambda s, b, p: log(f"  [{idx}]   +{s}s 战斗中 {p}"))
     dur = time.time() - t_round
     log(f"  [{idx}] 战斗流程结束: {outcome}（{dur:.0f} 秒）")
 
     if outcome == "stopped":
         return "stopped"
+    if outcome == "paused":
+        return "paused"
     if outcome == "stage":
         # 正常一场要 3 分钟左右；太短说明误判（比如界面过渡当成结束）
         if dur < 90:

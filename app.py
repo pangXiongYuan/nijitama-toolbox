@@ -1047,7 +1047,7 @@ class MainWindow(QMainWindow):
         self.btn_pause.setObjectName("Ghost")
         self.btn_pause.setMinimumHeight(38)
         self.btn_pause.setEnabled(False)
-        self.btn_pause.setToolTip("打完当前这一场后停在选关界面，点「继续」接着刷")
+        self.btn_pause.setToolTip("立刻停手；正在打的那一场会自己打完，停在结算界面，点「继续」接着刷")
         self.btn_pause.clicked.connect(self.on_pause)
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setObjectName("Ghost")
@@ -1592,8 +1592,8 @@ class MainWindow(QMainWindow):
         else:
             self.worker.request_pause()
             self.btn_pause.setText("继续")
-            self.append_log(">>> 已请求暂停：当前这一场打完后停下，不再开下一轮")
-            self.lbl_state.setText("将在本场结束后暂停…")
+            self.append_log(">>> 已暂停：脚本立刻停手，这一场让游戏自己打完")
+            self.lbl_state.setText("已停手（这一场会自己打完）")
 
     def on_stop(self):
         if self.worker and self.worker.isRunning():

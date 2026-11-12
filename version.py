@@ -12,7 +12,7 @@ version.py —— 版本号的唯一来源
 """
 
 APP_NAME = "にじたま 工具箱"
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 BUILD_DATE = "2026-11-12"
 
 __version__ = VERSION

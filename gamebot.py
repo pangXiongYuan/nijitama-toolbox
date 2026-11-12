@@ -1616,7 +1616,8 @@ class Game:
             self.page.wait_for_timeout(1000)
         return False
 
-    def run_battle(self, timeout=1500, on_tick=None, stop_check=None):
+    def run_battle(self, timeout=1500, on_tick=None, stop_check=None,
+                   pause_check=None):
         """
         完整跑一场（可能含多段连续战斗）。
 
@@ -1625,8 +1626,10 @@ class Game:
           - 只有「任務報告書」渲染完成后，点一次「承認する」
           - 点完不做别的，等界面自己出现「荘園に帰還 / 続けて任務へ」
           - 收到 stop_check 为真时立即中断，返回 'stopped'
+          - 收到 pause_check 为真时立刻停手（不再点承認），返回 'paused'，
+            这一场由游戏自己打完，停在结算界面等恢复
 
-        返回 'chapterend' / 'stage' / 'no_start' / 'timeout' / 'hang' / 'stopped'
+        返回 'chapterend' / 'stage' / 'no_start' / 'timeout' / 'hang' / 'stopped' / 'paused'
         """
         # 1) 先确认战斗真的开始了
         started = self.wait_battle_start(180, stop_check=stop_check)
@@ -1652,6 +1655,10 @@ class Game:
             if stop_check is not None and stop_check():
                 self.log("      收到停止请求，中断战斗等待")
                 return "stopped"
+            # 用户点了「暂停」：立刻停手，这一场交给游戏自己打完
+            if pause_check is not None and pause_check():
+                self.log("      收到暂停：停手，这一场让它自己打完")
+                return "paused"
 
             bs = self.battle_state() or {}
             if bs.get("chapterEnd"):

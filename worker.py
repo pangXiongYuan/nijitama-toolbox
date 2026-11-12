@@ -273,7 +273,7 @@ class BotWorker(QThread):
         if not self._pause.is_set():
             return
         self.sig_status.emit("已暂停（点「继续」接着刷）")
-        self.sig_log.emit(">>> 已暂停，停在选关界面；点「继续」接着刷")
+        self.sig_log.emit(">>> 已暂停，脚本停手；点「继续」接着刷")
         while self._pause.is_set() and not self._stop:
             time.sleep(0.2)
         if not self._stop:
@@ -418,7 +418,8 @@ class BotWorker(QThread):
                                        log, stop_check=self._stopped,
                                        stage_type=stage_type,
                                        stage_sub=cfg.get("stage_sub", ""),
-                                       stage_idx=cfg.get("stage_idx"))
+                                       stage_idx=cfg.get("stage_idx"),
+                                       pause_check=self.is_paused)
 
                 if st == "ok":
                     done += 1
@@ -427,6 +428,17 @@ class BotWorker(QThread):
                     self.sig_progress.emit(done, target if target else done)
                 elif st == "stopped":
                     break
+                elif st == "paused":
+                    # 已经停手了：这一场交给游戏自己打完，停在结算界面等恢复
+                    self._wait_if_paused()
+                    if self._stopped():
+                        break
+                    self.sig_status.emit("恢复中…")
+                    if not g.settle_to_list(stage_type=stage_type,
+                                            stop_check=self._stopped):
+                        self.sig_done.emit("恢复失败，已停止", done)
+                        return
+                    continue
                 elif st == "shortage":
                     self.sig_done.emit("道具/资源不足，已停止", done)
                     return
