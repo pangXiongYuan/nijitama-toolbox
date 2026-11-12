@@ -17,6 +17,7 @@ worker.py —— 后台刷本线程
 """
 import queue
 import socket
+import threading
 import time
 import traceback
 
@@ -242,18 +243,51 @@ class BotWorker(QThread):
         self.cfg = dict(cfg)
         self._cmds = queue.Queue()
         self._stop = False
+        self._pause = threading.Event()
         self.g = None
 
     # ---------- 外部接口 ----------
     def request_stop(self):
         self._stop = True
+        self._pause.clear()          # 停止优先，顺手把暂停解除
         try:
             self._cmds.put_nowait("stop")
         except Exception:
             pass
 
+    def request_pause(self):
+        """打完当前这一场后停在选关界面，不再开下一轮"""
+        self._pause.set()
+
+    def request_resume(self):
+        self._pause.clear()
+
+    def is_paused(self) -> bool:
+        return self._pause.is_set()
+
     def _stopped(self) -> bool:
         return self._stop
+
+    def _wait_if_paused(self):
+        """暂停时挂起：不占 CPU，也不碰游戏"""
+        if not self._pause.is_set():
+            return
+        self.sig_status.emit("已暂停（点「继续」接着刷）")
+        self.sig_log.emit(">>> 已暂停，停在选关界面；点「继续」接着刷")
+        while self._pause.is_set() and not self._stop:
+            time.sleep(0.2)
+        if not self._stop:
+            self.sig_status.emit("继续刷本")
+            self.sig_log.emit(">>> 已继续")
+
+    def _sleep_between(self, seconds: float):
+        """轮间隔；中途点暂停就挂住，点停止立刻退出"""
+        end = time.time() + max(seconds, 0.0)
+        while not self._stop and time.time() < end:
+            if self._pause.is_set():
+                self._wait_if_paused()
+                return
+            time.sleep(0.1)
 
     # ---------- 线程体 ----------
     def run(self):
@@ -360,6 +394,9 @@ class BotWorker(QThread):
 
             status("开始刷本")
             while (target == 0 or done < target) and not self._stopped():
+                self._wait_if_paused()
+                if self._stopped():
+                    break
                 self.sig_progress.emit(done, target if target else done + 1)
 
                 if not farmcore.ensure_battle_list(g, log, stage_type,
@@ -408,10 +445,7 @@ class BotWorker(QThread):
                         self.sig_done.emit("恢复失败，已停止", done)
                         return
 
-                for _ in range(int(interval * 10)):
-                    if self._stopped():
-                        break
-                    time.sleep(0.1)
+                self._sleep_between(interval)
 
             # ---------- 收尾 ----------
             if self._stop:

@@ -1043,12 +1043,19 @@ class MainWindow(QMainWindow):
         self.btn_start.setObjectName("Primary")
         self.btn_start.setMinimumHeight(38)
         self.btn_start.clicked.connect(self.on_start)
+        self.btn_pause = QPushButton("暂停")
+        self.btn_pause.setObjectName("Ghost")
+        self.btn_pause.setMinimumHeight(38)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.setToolTip("打完当前这一场后停在选关界面，点「继续」接着刷")
+        self.btn_pause.clicked.connect(self.on_pause)
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setObjectName("Ghost")
         self.btn_stop.setMinimumHeight(38)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.on_stop)
         ctl.addWidget(self.btn_start, 2)
+        ctl.addWidget(self.btn_pause, 1)
         ctl.addWidget(self.btn_stop, 1)
         v.addLayout(ctl)
 
@@ -1553,6 +1560,8 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
         self.btn_start.setEnabled(False)
+        self.btn_pause.setEnabled(True)
+        self.btn_pause.setText("暂停")
         self.btn_stop.setEnabled(True)
         self.append_log(f"===== 开始（{self.cb_mode.currentText()}）：{name} =====")
         # 开始刷本后自动最小化，不挡着游戏窗口
@@ -1566,15 +1575,33 @@ class MainWindow(QMainWindow):
         self.lbl_state.setText(summary)
         self.append_log(f"===== {summary} =====")
         self.btn_start.setEnabled(True)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.setText("暂停")
         self.btn_stop.setEnabled(False)
         self.progress.setValue(done)
         self._refresh_conn()
+
+    def on_pause(self):
+        """暂停/继续：暂停不会打断正在打的那一场，只在两轮之间生效"""
+        if not (self.worker and self.worker.isRunning()):
+            return
+        if self.worker.is_paused():
+            self.worker.request_resume()
+            self.btn_pause.setText("暂停")
+            self.append_log(">>> 已继续")
+        else:
+            self.worker.request_pause()
+            self.btn_pause.setText("继续")
+            self.append_log(">>> 已请求暂停：当前这一场打完后停下，不再开下一轮")
+            self.lbl_state.setText("将在本场结束后暂停…")
 
     def on_stop(self):
         if self.worker and self.worker.isRunning():
             self.append_log(">>> 正在停止（战斗会立即中断）…")
             self.lbl_state.setText("正在停止…")
             self.worker.request_stop()
+            self.btn_pause.setEnabled(False)
+            self.btn_pause.setText("暂停")
             self.btn_stop.setEnabled(False)
             self.statusBar().showMessage("正在停止…", 5000)
 
