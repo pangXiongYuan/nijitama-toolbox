@@ -1,4 +1,4 @@
-﻿# にじたま 工具箱 —— 项目交接文档
+# にじたま 工具箱 —— 项目交接文档
 
 > 给「重新开始一个会话的 AI」看。
 > 最后更新：2026-11-13，版本 **1.6.2**
@@ -10,7 +10,7 @@
 
 1. 读本文件 + `CHANGELOG.md`（了解历史）
 2. 需要改哪块就看对应文件头部注释（都写了职责）
-3. 改完必做三件事：**升版本号** → **写 CHANGELOG** → **同步 docs/ 文档**
+3. 改完必做四件事：**升版本号** → **写 CHANGELOG** → **同步 `功能说明.md`（根目录 + docs/ 两份）** → **README 更新日志表换一行**
 4. 不要没被要求就打包、就跑游戏测试
 
 ---
@@ -49,9 +49,9 @@ nijitama-farm/
 ├── LICENSE          MIT
 ├── 功能说明.md       功能清单（给用户看，同步到 docs/）
 ├── assets/          app.ico / app.png / banner.png / keyvisual.jpg / icons/
-├── docs/            使用说明.txt（用户自己维护！）/ 功能说明.md
+├── docs/            使用说明.txt + 功能说明.md（打包时带上）
 ├── data/            config.json、日志、doc_history/、error.log
-├── profile/         浏览器登录态（约 200MB，不要删）
+├── profile/         浏览器登录态（约 3.7 GB，不要删，也不许提交）
 └── steps/           出错截图输出目录
 ```
 
@@ -116,6 +116,27 @@ nijitama-farm/
 - 打分：标题一致 +100，包含 +60；副标题一致 +50；数字一致 +25；类型一致 +20
 - ≥120 才点，避免点到同名的素材关
 - 不够分 → 按序号定位（序号语言无关）
+- **序号必须按「全列表位置」记**：读取时若先过滤了剧情关再编号，点击时又用未过滤的列表，就会错位点到剧情关
+
+### 8. 点击安全区与贴边
+`scroll_card_into_view()` 里可用区是 `y1+95 ~ y2-110`（避开顶部横幅和底部工具栏）。
+卡片只差几十像素时**不要判失败**——列表滚到底就再也动不了，会空转 8 次。
+现在 `|y - 钳位后的y| <= 40` 就把点击点钳进可用区，照样点在卡片上。
+
+### 9. 暂停 / 停止的语义（v1.6.1 起）
+- **停止**：`_stop` 置位，所有导航函数、战斗循环都接 `stop_check`，1 秒内退出；游戏里那场照常打完
+- **暂停**：`_pause`（`threading.Event`）置位 → `run_battle` 立刻返回 `paused`，**不再点承認**，
+  这一场由游戏自己打完停在报告书；worker 挂起等恢复，恢复时先 `settle_to_list()` 把这场收尾
+- 停止优先级高于暂停：`request_stop()` 会顺手清掉 `_pause`
+- 新加任何长循环（导航、等待）都要带上 `stop_check` / `pause_check`，否则又会出现「按了没反应」
+
+### 10. 窗口被遮挡会冻结游戏
+Chrome 在 Windows 上会检测窗口是否被完全遮挡，被挡住就当成 hidden：rAF 停止、定时器降频，
+Cocos 的逻辑全挂在 rAF 上，于是一起冻住。
+启动参数已加：`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、
+`--disable-background-timer-throttling`，并在 `--disable-features` 里加了
+`CalculateNativeWinOcclusion,IntensiveWakeUpThrottling`。
+**最小化仍然会停**，那是真 hidden，参数救不回来。
 
 ---
 
@@ -154,6 +175,8 @@ nijitama-farm/
    轮次 ≥100 时主动提醒（计数见工作区 `AGENTS.md`）
 8. **PROGRESS.md / CHANGELOG.md / 功能说明.md 由 AI 维护**，用户不再手改；
    需求由用户提出，改完由 AI 一次性同步三份文档
+9. 装软件默认放 **E 盘**（`E:\Apps\`），别占 C 盘；Squirrel 类安装包不认自定义路径时，
+   先装默认位置再用 `mklink /J` 做目录联接
 
 ---
 
@@ -182,7 +205,8 @@ nijitama-farm/
 ```powershell
 cd D:\Documents\deepseek-harness\default-workspace\nijitama-farm
 
-# 语法检查python -m py_compile app.py worker.py farmcore.py gamebot.py config.py paths.py version.py docwatch.py
+# 语法检查
+python -m py_compile app.py worker.py farmcore.py gamebot.py config.py paths.py version.py docwatch.py
 
 # 源码运行
 python app.py
@@ -199,6 +223,12 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir `
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
   Where-Object { $_.CommandLine -like "*nijitama-farm*profile*" } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+# git（本机没装独立 git，用 GitHub Desktop 自带那份）
+& "$env:DSH_HOME\git.ps1" status --short
+& "$env:DSH_HOME\git.ps1" add -A
+& "$env:DSH_HOME\git.ps1" commit -m "fix: ..."
+& "$env:DSH_HOME\git.ps1" push origin main
 ```
 
 **PowerShell 坑**：命令行里传含日文/引号的 Python 代码很容易被转义搞坏。
@@ -210,7 +240,8 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 
 | 限制 | 说明 |
 |---|---|
-| 战斗中无法中断 | 游戏内战斗只能等打完，脚本只能停止等待 |
+| 战斗中无法中断 | 暂停只是脚本停手，游戏里那场要等它打完 |
+| 窗口最小化会停 | 被判成真 hidden，启动参数救不回来；挂着刷时别最小化，露一条边也行 |
 | 同账号不能双开 | bot 和手动浏览器共用 profile |
 | 打包版不自动更新 | 改代码要重新打包，源码版才实时 |
 | 界面滑动观感一般 | 为了定位准确故意放慢，不要轻易改 |
@@ -236,7 +267,8 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
    （只留最近三版，最老的一行删掉）
 2. `git add -A` → `git commit -m "..."` → `git tag -f vX.Y.Z`
 3. `git push origin main` → `git push -f origin vX.Y.Z`
-4. 建 Release，内容抄 CHANGELOG 对应版本
+4. 建 Release：**说明里只放下载信息，不要抄更新日志**（用户明确要求），
+   更新记录看 README 的「更新日志」表和 CHANGELOG
 5. 打包 → 两个 zip 传到 Release，**文件名带版本号**：
    - `nijitama-toolbox-vX.Y.Z-full.zip`：整个 `dist/nijitama-toolbox/`（约 86 MB，含运行环境）
    - `nijitama-toolbox-vX.Y.Z-update.zip`：只放 exe（约 3 MB，覆盖旧 exe 即更新）
@@ -244,3 +276,25 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
      这样每次发版只换文件、不用改文案
 
 `profile/`、`data/`、`steps/` 已在 `.gitignore` 里，别解开。
+
+---
+
+## 十二、交接状态（2026-11-14）
+
+**当前**：版本 1.6.2，已发布到 GitHub Release（full + update 两个包），工作区干净。
+
+**最近几版做了什么**
+
+| 版本 | 内容 |
+|---|---|
+| 1.5.1 | 修最后一关卡点不进去（贴边 1px）、修序号错位点到剧情关 |
+| 1.5.2 | 停止时立刻中断导航；恢复流程按副本类型分流 |
+| 1.6.0 | 新增暂停/继续 |
+| 1.6.1 | 暂停改成「立刻停手，本场自己打完」 |
+| 1.6.2 | 关掉 Chrome 遮挡检测与定时器节流，窗口被挡住不再冻结 |
+
+**环境**：Python 3.11.9（Store 版）、PySide6 6.12、PyInstaller 6.22。
+git 走 `~/.dsh/git.ps1`（GitHub Desktop 自带 2.56）；发布用 `~/.dsh/ghtoken.ps1`
+读 Windows 凭据管理器里的 token。
+
+**下次接着做**：等用户提需求。待办列表在第十节，别自作主张开工。
