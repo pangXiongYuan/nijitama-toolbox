@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 version.py —— 版本号的唯一来源
 
@@ -12,7 +12,7 @@ version.py —— 版本号的唯一来源
 """
 
 APP_NAME = "にじたま 工具箱"
-VERSION = "1.6.1"
-BUILD_DATE = "2026-11-12"
+VERSION = "1.6.2"
+BUILD_DATE = "2026-11-13"
 
 __version__ = VERSION

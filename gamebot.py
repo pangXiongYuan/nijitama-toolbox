@@ -2007,8 +2007,14 @@ def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
         "--no-first-run",
         "--no-default-browser-check",
         # 关掉端侧 AI 模型下载和组件更新，避免 profile 膨胀到几个 GB
-        "--disable-features=OptimizationGuideModelDownloading,OptimizationHints",
+        "--disable-features=OptimizationGuideModelDownloading,OptimizationHints,"
+        "CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
         "--disable-component-update",
+        # 窗口被别的窗口挡住时 Chrome 会把页面当成隐藏：rAF 停、定时器降频，
+        # Cocos 的逻辑全挂在 rAF 上，游戏就冻住了。下面三行关掉这些节流。
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
         f"--user-data-dir={profile_dir}",
         f"--remote-debugging-port={port}",
         "--ignore-gpu-blocklist",

@@ -1,4 +1,4 @@
-﻿# にじたま 工具箱（nijitama-toolbox）
+# にじたま 工具箱（nijitama-toolbox）
 
 自动刷《にじたま》（魂これ / tamacolle / 地魂男儿）副本的 Windows 桌面工具。
 Python + PySide6 做界面，Playwright 通过 CDP 驱动真实 Chrome 操作游戏。
@@ -116,9 +116,9 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir `
 
 | 版本 | 日期 | 主要变化 |
 |---|---|---|
+| 1.6.2 | 2026-11-13 | 窗口被挡住不再冻结（关掉 Chrome 的遮挡/定时器节流） |
 | 1.6.1 | 2026-11-12 | 暂停改为立刻停手，本场由游戏自己打完 |
 | 1.6.0 | 2026-11-12 | 新增暂停/继续 |
-| 1.5.2 | 2026-11-12 | 修复在编队界面点停止会卡住；恢复流程不再固定走净化巡历 |
 
 更早的版本见 [CHANGELOG.md](CHANGELOG.md)。
 

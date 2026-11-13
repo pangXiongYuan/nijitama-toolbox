@@ -7,6 +7,19 @@
 
 ---
 
+## 1.6.2 — 2026-11-13
+
+### 修复
+- **窗口被别的窗口挡住后，游戏不动了**：Chrome 检测到窗口被完全遮挡时，会把页面当成
+  「不可见」——`requestAnimationFrame` 停止回调，定时器降到每秒 1 次，5 分钟后每分钟 1 次。
+  Cocos 的逻辑全挂在 rAF 上，于是一起冻住，脚本点什么都没反应。
+  启动参数补了 `--disable-backgrounding-occluded-windows`、
+  `--disable-renderer-backgrounding`、`--disable-background-timer-throttling`，
+  并在 `--disable-features` 里加了 `CalculateNativeWinOcclusion,IntensiveWakeUpThrottling`。
+  现在被挡住、切到别的窗口都会继续跑；**最小化仍然会停**（那是真 hidden，参数救不回来）。
+
+---
+
 ## 1.6.1 — 2026-11-12
 
 ### 变更
