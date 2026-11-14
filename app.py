@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 import config
 import paths
+import sessionlog
 from version import APP_NAME, VERSION
 
 HERE = paths.HERE
@@ -1156,7 +1157,10 @@ class MainWindow(QMainWindow):
         b3 = QPushButton("错误日志"); b3.setObjectName("Ghost")
         b3.setToolTip("打开 data/error.log（程序出错时自动记录）")
         b3.clicked.connect(self._open_error_log)
-        row.addWidget(b1); row.addWidget(b2); row.addWidget(b3)
+        b4 = QPushButton("会话日志"); b4.setObjectName("Ghost")
+        b4.setToolTip("打开 data/session.log（完整操作记录，卡死时用它排查）")
+        b4.clicked.connect(self._open_session_log)
+        row.addWidget(b1); row.addWidget(b2); row.addWidget(b3); row.addWidget(b4)
         row.addStretch(1)
         v.addLayout(row)
         return w
@@ -1165,6 +1169,16 @@ class MainWindow(QMainWindow):
         p = paths.DATA_DIR / "error.log"
         if not p.exists():
             DarkMsg.info(self, "没有错误记录", "程序还没有记录到异常。")
+            return
+        try:
+            os.startfile(str(p))
+        except Exception as e:
+            DarkMsg.warn(self, "打不开", f"{e}\n\n文件位置：\n{p}")
+
+    def _open_session_log(self):
+        p = paths.DATA_DIR / "session.log"
+        if not p.exists():
+            DarkMsg.info(self, "还没有日志", "刷本一次后就会有记录。")
             return
         try:
             os.startfile(str(p))
@@ -1414,6 +1428,7 @@ class MainWindow(QMainWindow):
     def append_log(self, text: str):
         self.txt_log.appendPlainText(text)
         self.txt_log.moveCursor(QTextCursor.End)
+        sessionlog.write(text, paths.DATA_DIR / "session.log")
 
     def _copy_log(self):
         QApplication.clipboard().setText(self.txt_log.toPlainText())
@@ -1749,6 +1764,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("にじたま 工具箱")
+    sessionlog.write(f"=== 启动 {APP_NAME} v{VERSION} ===",
+                     paths.DATA_DIR / "session.log")
     ic = app_icon()
     if not ic.isNull():
         app.setWindowIcon(ic)      # 让所有窗口/对话框都用这个图标

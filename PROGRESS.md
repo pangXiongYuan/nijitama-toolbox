@@ -1,7 +1,7 @@
 # にじたま 工具箱 —— 项目交接文档
 
 > 给「重新开始一个会话的 AI」看。
-> 最后更新：2026-11-13，版本 **1.6.2**
+> 最后更新：2026-11-14，版本 **1.6.3**
 > 新会话请先读完这份 + `CHANGELOG.md`，就能直接接手。
 
 ---
@@ -40,6 +40,7 @@ nijitama-farm/
 ├── paths.py         路径定位（区分源码/打包）
 ├── version.py       版本号唯一来源
 ├── docwatch.py      说明文档自动留档
+├── sessionlog.py    滚动会话日志（写 data/session.log，512KB 裁一次）
 ├── make_icon.py     从 keyvisual.jpg 生成 app.ico
 ├── farm.py          CLI 版本（旧，保留但基本不用）
 ├── _bootstrap.py    让 Python 找到 playwright（Store 版必须，有副作用）
@@ -60,7 +61,7 @@ nijitama-farm/
 
 ---
 
-## 三、当前功能（v1.6.2）
+## 三、当前功能（v1.6.3）
 
 | 模块 | 说明 |
 |---|---|
@@ -70,7 +71,7 @@ nijitama-farm/
 | 曜日提醒 | **每天弹窗一次**问是否刷新（不再自动静默读取）|
 | 汉化适配 | 中日文双语的卡片匹配 + 序号兜底 |
 | 设置 | 窗口大小、声音、无头、GPU、清理浏览器缓存 |
-| 日志 | 实时日志 + 「错误日志」按钮打开 data/error.log |
+| 日志 | 实时日志 + 「错误日志」/「会话日志」按钮，分别打开 error.log 和 session.log |
 | 异常捕获 | 全局 excepthook + threading.excepthook，写 error.log 并弹窗 |
 | 帮助 | 内置帮助面板（首次启动弹出，可勾不再提示）|
 | 文档留档 | docwatch 每 3 分钟检查内容哈希，变化就存档 |

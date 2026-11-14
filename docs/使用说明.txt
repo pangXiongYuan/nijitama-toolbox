@@ -94,6 +94,8 @@
 【文件夹】
   profile/        登录状态（不要删）
   data/           配置和日志
+    session.log     完整操作记录，游戏卡死时翻这个
+    error.log       程序出错时的堆栈
   _internal/      运行库
   使用说明.txt     本文件，可以自己改
   功能说明.txt     更详细的功能说明
