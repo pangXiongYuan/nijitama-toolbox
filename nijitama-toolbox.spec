@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('assets', 'assets'), ('docs', 'docs')]
 binaries = []
-hiddenimports = ['worker', 'farmcore', 'gamebot', 'config', 'paths', 'version', 'docwatch', 'PySide6.QtSvg']
+hiddenimports = ['worker', 'farmcore', 'gamebot', 'config', 'paths', 'version', 'docwatch', 'sessionlog', 'PySide6.QtSvg']
 tmp_ret = collect_all('playwright')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

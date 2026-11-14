@@ -1,4 +1,4 @@
-# にじたま 工具箱（nijitama-toolbox）
+﻿# にじたま 工具箱（nijitama-toolbox）
 
 自动刷《にじたま》（魂これ / tamacolle / 地魂男儿）副本的 Windows 桌面工具。
 Python + PySide6 做界面，Playwright 通过 CDP 驱动真实 Chrome 操作游戏。
@@ -52,8 +52,8 @@ mission report appears.
 
 | 文件名 | 用途 |
 |---|---|
-| `nijitama-toolbox-v1.6.2-full.zip` | 第一次用。约 86 MB，含运行环境，解压即用 |
-| `nijitama-toolbox-v1.6.2-update.zip` | 已经装过旧版。约 3 MB，只有 exe，覆盖旧的就行 |
+| `nijitama-toolbox-v1.6.3-full.zip` | 第一次用。约 86 MB，含运行环境，解压即用 |
+| `nijitama-toolbox-v1.6.3-update.zip` | 已经装过旧版。约 3 MB，只有 exe，覆盖旧的就行 |
 
 - 全量包：解压后双击 `nijitama-toolbox.exe`，不用装 Python 和依赖
 - 更新包：解压出 `nijitama-toolbox.exe`，覆盖原来那个即可，
