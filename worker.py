@@ -339,7 +339,7 @@ class BotWorker(QThread):
                                  height=int(cfg.get("height", 600)),
                                  maximized=bool(cfg.get("maximized", False)),
                                  headless=headless, mute=mute,
-                                 gpu=bool(cfg.get("gpu", True)))
+                                 gpu_mode=str(cfg.get("gpu_mode", "auto")))
                     if not wait_port(port, 45):
                         self.sig_done.emit("浏览器启动超时（调试端口未就绪）", 0)
                         return

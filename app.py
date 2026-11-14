@@ -1107,8 +1107,16 @@ class MainWindow(QMainWindow):
         v.addWidget(c3)
 
         c4 = Card("settings", "显卡渲染")
-        self.sw_gpu = ToggleSwitch(bool(self.cfg.get("gpu", True)))
-        c4.add_right(self.sw_gpu)
+        self.cb_gpu = QComboBox()
+        self.cb_gpu.addItem("自动（推荐）", "auto")
+        self.cb_gpu.addItem("强制独显", "force")
+        self.cb_gpu.addItem("软件渲染", "swiftshader")
+        self.cb_gpu.setCurrentIndex(max(0, self.cb_gpu.findData(self._gpu_mode())))
+        self.cb_gpu.setToolTip(
+            "自动：不传 GPU 参数，交给 Chrome 判断\n"
+            "强制独显：D3D11，省 CPU，驱动不稳时可能冻画面\n"
+            "软件渲染：应急用，部分游戏会白屏")
+        c4.add_right(self.cb_gpu)
         v.addWidget(c4)
 
         # 清理浏览器缓存（AI 模型、语言包、崩溃日志等占空间的东西）
@@ -1447,11 +1455,18 @@ class MainWindow(QMainWindow):
             "window_mode": key, "width": w_, "height": h_, "maximized": maximized,
             "headless": self.sw_headless.isChecked(),
             "sound": self.sw_sound.isChecked(),
-            "gpu": self.sw_gpu.isChecked(),
+            "gpu_mode": self.cb_gpu.currentData(),
         })
         if is_weekday:
             self.cfg["stage_title_weekday"] = title
         return name
+
+    def _gpu_mode(self) -> str:
+        """读显卡模式；老配置里只有 gpu 布尔值，按旧行为映射一下"""
+        m = str(self.cfg.get("gpu_mode") or "")
+        if m in ("auto", "force", "swiftshader"):
+            return m
+        return "force" if self.cfg.get("gpu", True) else "swiftshader"
 
     def save_settings(self):
         self._collect_cfg()
@@ -1460,7 +1475,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("设置已保存", 3000)
 
     def open_game(self):
-        from gamebot import find_chrome
+        from gamebot import chrome_args, find_chrome
         exe = find_chrome()
         if not exe:
             DarkMsg.warn(self, "找不到浏览器", "需要系统里装有 Chrome 或 Edge。")
@@ -1471,26 +1486,12 @@ class MainWindow(QMainWindow):
             return
         key, w_, h_, maximized = self._preset()
         profile = str(HERE / "profile")
-        args = [
-            "--no-sandbox", "--no-first-run", "--no-default-browser-check",
-            # 关掉 Chrome 的端侧 AI 模型下载与组件更新（会吃掉几 GB 磁盘）
-            "--disable-features=OptimizationGuideModelDownloading,OptimizationHints",
-            "--disable-component-update",
-            f"--user-data-dir={profile}",
-            f"--remote-debugging-port={CDP_PORT}",
-            "--disable-gpu-sandbox",
-        ]
-        # 跟设置里的「显卡渲染」开关走：关掉就切软件渲染
-        if self.sw_gpu.isChecked():
-            args += ["--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11"]
-        else:
-            args += ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
-        if maximized:
-            args.append("--start-maximized")
-        else:
-            args += [f"--window-size={w_},{h_ + CHROME_UI_H}", "--window-position=120,40"]
-        if not self._sound_effective():
-            args.append("--mute-audio")
+        # 启动参数只有 gamebot.chrome_args 一份，避免两边不一致
+        args = chrome_args(
+            gpu_mode=self.cb_gpu.currentData(),
+            width=w_, height=h_, maximized=maximized,
+            mute=not self._sound_effective(),
+            profile=profile, port=CDP_PORT)
         args.append(GAME_URL)
         try:
             paths.DATA_DIR.mkdir(parents=True, exist_ok=True)

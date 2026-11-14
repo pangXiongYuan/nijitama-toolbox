@@ -1987,22 +1987,18 @@ def find_chrome():
     return None
 
 
-def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
-                 maximized=False, headless=False, mute=False, gpu=True):
+def chrome_args(gpu_mode="auto", width=1024, height=600, maximized=False,
+                headless=False, mute=False, profile=None, port=9222):
     """
-    独立启动一个 Chrome（脱离当前进程树），并开启调试端口。
-    返回 Popen 对象 —— 注意：之后用 attach() 通过 CDP 接管，
-    这样即使本程序退出，浏览器也不会被关闭。
+    启动参数只在这里拼一份，spawn_chrome() 和界面上的「启动游戏」共用，
+    免得改了一边忘了另一边（1.6.2 就漏过遮挡参数）。
+
+    gpu_mode:
+      auto        -> 不传 GPU 参数，交给 Chrome 自己判断（默认）
+      force       -> 强制独显 D3D11，省 CPU
+      swiftshader -> 纯软件渲染，应急用；部分 WebGL2 游戏会白屏
     """
-    import subprocess
-
-    exe = find_chrome()
-    if not exe:
-        raise RuntimeError("找不到系统 Chrome，请确认已安装")
-
-    profile_dir = str(profile_dir or PROFILE)
     args = [
-        exe,
         "--no-sandbox",
         "--no-first-run",
         "--no-default-browser-check",
@@ -2015,16 +2011,11 @@ def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
-        f"--user-data-dir={profile_dir}",
-        f"--remote-debugging-port={port}",
         "--disable-blink-features=AutomationControlled",
         "--disable-gpu-sandbox",
+        f"--user-data-dir={profile}",
+        f"--remote-debugging-port={port}",
     ]
-    if gpu:
-        args += ["--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11"]
-    else:
-        # 软件渲染：慢，但不会因为显卡驱动重置把画面冻住
-        args += ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
     if headless:
         args.append("--headless=new")
     elif maximized:
@@ -2034,7 +2025,30 @@ def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
         args += [f"--window-size={width},{height + 92}", "--window-position=120,40"]
     if mute:
         args.append("--mute-audio")
-    args.append(SWITCH)
+    if gpu_mode == "force":
+        args += ["--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11"]
+    elif gpu_mode == "swiftshader":
+        args += ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+    return args
+
+
+def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
+                 maximized=False, headless=False, mute=False, gpu_mode="auto"):
+    """
+    独立启动一个 Chrome（脱离当前进程树），并开启调试端口。
+    返回 Popen 对象 —— 注意：之后用 attach() 通过 CDP 接管，
+    这样即使本程序退出，浏览器也不会被关闭。
+    """
+    import subprocess
+
+    exe = find_chrome()
+    if not exe:
+        raise RuntimeError("找不到系统 Chrome，请确认已安装")
+
+    profile_dir = str(profile_dir or PROFILE)
+    args = [exe] + chrome_args(
+        gpu_mode=gpu_mode, width=width, height=height, maximized=maximized,
+        headless=headless, mute=mute, profile=profile_dir, port=port) + [SWITCH]
 
     # DETACHED_PROCESS(0x8) | CREATE_NEW_PROCESS_GROUP(0x200)
     return subprocess.Popen(args, creationflags=0x00000008 | 0x00000200,

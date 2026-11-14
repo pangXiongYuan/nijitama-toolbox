@@ -22,7 +22,8 @@ DEFAULTS = {
     "cdp_port": 9222,
     "headless": False,
     "sound": True,            # 启动时打开声音（无头模式强制静音）
-    "gpu": True,
+    "gpu": True,               # 旧字段，只为兼容老配置，读的时候由 gpu_mode 覆盖
+    "gpu_mode": "auto",        # auto=交给 Chrome / force=强制独显 D3D11 / swiftshader=软件渲染
     "window_mode": "small",   # small=小窗口(960x540) / max=全屏最大化
     "show_help_on_start": True,   # 启动时是否自动弹出帮助（勾选不再提示后为 False）
     # 关卡列表缓存
