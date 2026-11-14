@@ -1478,8 +1478,13 @@ class MainWindow(QMainWindow):
             "--disable-component-update",
             f"--user-data-dir={profile}",
             f"--remote-debugging-port={CDP_PORT}",
-            "--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11",
+            "--disable-gpu-sandbox",
         ]
+        # 跟设置里的「显卡渲染」开关走：关掉就切软件渲染
+        if self.sw_gpu.isChecked():
+            args += ["--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11"]
+        else:
+            args += ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
         if maximized:
             args.append("--start-maximized")
         else:

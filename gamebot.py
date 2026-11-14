@@ -1988,7 +1988,7 @@ def find_chrome():
 
 
 def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
-                 maximized=False, headless=False, mute=False):
+                 maximized=False, headless=False, mute=False, gpu=True):
     """
     独立启动一个 Chrome（脱离当前进程树），并开启调试端口。
     返回 Popen 对象 —— 注意：之后用 attach() 通过 CDP 接管，
@@ -2017,11 +2017,14 @@ def spawn_chrome(profile_dir=None, port=9222, width=1024, height=600,
         "--disable-renderer-backgrounding",
         f"--user-data-dir={profile_dir}",
         f"--remote-debugging-port={port}",
-        "--ignore-gpu-blocklist",
-        "--enable-gpu",
-        "--use-angle=d3d11",
         "--disable-blink-features=AutomationControlled",
+        "--disable-gpu-sandbox",
     ]
+    if gpu:
+        args += ["--ignore-gpu-blocklist", "--enable-gpu", "--use-angle=d3d11"]
+    else:
+        # 软件渲染：慢，但不会因为显卡驱动重置把画面冻住
+        args += ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
     if headless:
         args.append("--headless=new")
     elif maximized:
