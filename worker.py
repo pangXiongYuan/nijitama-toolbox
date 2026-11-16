@@ -43,16 +43,20 @@ def cdp_alive(port=9222) -> bool:
 
 class ListWorker(QThread):
     """
-    临时连接游戏，读取关卡列表
-      kind="weekday" -> 曜日任務（每天轮换）
-      kind="junreki" -> 净化巡历（永久保存）
+    临时连接游戏，读取列表
+      kind="weekday"  -> 曜日任務关卡（每天轮换）
+      kind="chapters" -> 某个入口的章节（话）列表
+      kind="stages"   -> 某入口、某话的战场列表
     """
     sig_done = Signal(list, str)   # cards, error
 
-    def __init__(self, cfg: dict, kind="weekday", parent=None):
+    def __init__(self, cfg: dict, kind="weekday", entry="junreki",
+                 chapter=None, parent=None):
         super().__init__(parent)
         self.cfg = dict(cfg)
         self.kind = kind
+        self.entry = entry
+        self.chapter = dict(chapter or {})
         self._logfile = None
 
     def _log(self, msg: str):
@@ -86,6 +90,7 @@ class ListWorker(QThread):
             self._log(f"已连接，当前页面: {page.url}")
 
             g = Game(page, log=self._log)
+            g.release_mouse()          # 清掉上一次可能残留的按下
             ok = g.boot(reuse=True)
             self._log(f"boot={ok} 当前界面={g.screens()}")
             if not ok:
@@ -114,69 +119,42 @@ class ListWorker(QThread):
                     self.sig_done.emit([], "没能进入曜日任務列表。\n"
                                            "请确认游戏里那个曜日任務图标是亮的（已解锁）。")
                     return
-                # 前置断言：必须真的在「曜日任務列表」上
                 kind = g.screen_kind()
                 self._log(f"界面判定: {kind}")
                 if kind != "weekday_list":
                     self._log(f"没进入曜日任務列表（判定为 {kind}）")
                     self.sig_done.emit([], f"没进入曜日任務列表（当前是 {kind}），请重试。")
                     return
-
-                def pick():
-                    return [{"texts": [c["title"], c["sub"]], "xy": None,
-                             "idx": c.get("idx")}
-                            for c in g.weekday_cards()]
+                cards = []
+                for i in range(10):
+                    cards = g.weekday_cards()
+                    if cards:
+                        self._log(f"第 {i+1} 次读取到 {len(cards)} 个关卡（含滚动收集）")
+                        break
+                    page.wait_for_timeout(1000)
+                out = [{"title": c["title"], "sub": c.get("sub", ""),
+                        "idx": c.get("idx", i)} for i, c in enumerate(cards)]
+            elif self.kind == "chapters":
+                name = gamebot.ENTRY_NAME.get(self.entry, self.entry)
+                self._log(f"读取「{name}」的章节列表…")
+                out = g.read_chapters(self.entry)
+                if not out:
+                    self.sig_done.emit([], f"没读到「{name}」的章节。当前界面：{g.screens()}")
+                    return
             else:
-                self._log("已在关卡选择，进入净化巡历（戦場列表）…")
-                if not g.to_battle_list():
-                    self._log(f"进不了戦場列表，界面={g.screens()}")
-                    self.sig_done.emit([], "没能进入净化巡历的戦場列表。")
-                    return
-                kind = g.screen_kind()
-                self._log(f"界面判定: {kind}")
-                if kind != "battle_list":
-                    self._log(f"没进入戦場列表（判定为 {kind}）")
-                    self.sig_done.emit([], f"没进入戦場列表（当前是 {kind}），请重试。")
+                name = gamebot.ENTRY_NAME.get(self.entry, self.entry)
+                ctitle = self.chapter.get("title", "")
+                self._log(f"读取「{name} / {ctitle}」的战场列表…")
+                out = g.read_stages(self.entry, ctitle, self.chapter.get("sub", ""))
+                if not out:
+                    self.sig_done.emit([], f"「{ctitle}」里没读到关卡。\n"
+                                           f"当前界面：{g.screens()}")
                     return
 
-                def pick():
-                    return [{"texts": [c["title"], c["sub"]], "xy": None, "idx": i}
-                            for i, c in enumerate(g.collect_all_cards())
-                            if "戦場" in c.get("sub", "")]
-
-            cards = []
-            for i in range(10):
-                raw = pick()
-                if raw:
-                    cards = raw
-                    self._log(f"第 {i+1} 次读取到 {len(raw)} 个关卡（含滚动收集）")
-                    break
-                page.wait_for_timeout(1000)
-            if not cards:
-                self._log(f"没读到卡片，界面={g.screens()}")
-                try:
-                    allcards = g.card_list() or []
-                    self._log(f"当前列表卡片 {len(allcards)} 个：")
-                    for c in allcards[:10]:
-                        self._log(f"   {(c.get('texts') or [])[:2]}")
-                except Exception as e:
-                    self._log(f"   列表诊断失败: {e}")
-                self.sig_done.emit([], f"没读到关卡卡片。当前界面：{g.screens()}")
-                return
-
-            self._log("读到的前几关：")
-            for c in cards[:6]:
-                self._log(f"   {c.get('texts')[:2]}")
-
-            out = []
-            for c in cards:
-                texts = c.get("texts") or []
-                if not texts:
-                    continue
-                out.append({"title": str(texts[0]),
-                            "sub": str(texts[1]) if len(texts) > 1 else "",
-                            "idx": c.get("idx", len(out))})
-            self._log(f"完成，共 {len(out)} 关")
+            self._log("读到的前几条：")
+            for c in out[:6]:
+                self._log(f"   {c['title']} / {c['sub']}")
+            self._log(f"完成，共 {len(out)} 条")
             self.sig_done.emit(out, "")
         except Exception as e:
             self._log(f"异常: {e}")
@@ -217,6 +195,7 @@ class HomeWorker(QThread):
             browser, ctx, page = attach(pw, port)
             page.set_default_timeout(20000)
             g = Game(page, log=lambda m: None)
+            g.release_mouse()          # 清掉上一次可能残留的按下
             if not g.boot(reuse=True):
                 self.sig_done.emit(False, "游戏未就绪")
                 return
@@ -245,6 +224,7 @@ class BotWorker(QThread):
         self._stop = False
         self._pause = threading.Event()
         self.g = None
+        self._reloaded = False      # 鼠标点不动时只能重载自救一次，防止来回重载
 
     # ---------- 外部接口 ----------
     def request_stop(self):
@@ -299,9 +279,10 @@ class BotWorker(QThread):
         fails = 0
         target = int(cfg.get("runs", 5))
         interval = float(cfg.get("interval", 2.0))
-        stage_title = cfg.get("stage_title", "")
-        keywords = cfg.get("stage_keywords", ["江戸", "火事"])
-        stage_type = cfg.get("stage_type", "junreki")
+        entry = cfg.get("entry", cfg.get("stage_type", "junreki"))
+        entry = "weekday" if entry == "weekday" else entry
+        chapter = cfg.get("chapter") or {}
+        stages = cfg.get("stages") or []
         mode = cfg.get("mode", "oneclick")
         after = cfg.get("after", "keep")
 
@@ -349,6 +330,7 @@ class BotWorker(QThread):
             page.set_default_timeout(20000)
             g = Game(page, log=log)
             self.g = g
+            g.release_mouse()          # 清掉上一次可能残留的按下
 
             # 未登录检测：直接给友好提示，不要干等 2 分钟
             if "/login" in (page.url or "").lower():
@@ -386,12 +368,32 @@ class BotWorker(QThread):
                     return
             else:
                 log("已经在关卡选择界面，直接开始")
-            if stage_type == "weekday":
+            if not stages:
+                self.sig_done.emit("还没选关卡。先在刷本页选「话」和关卡（可以勾多关，"
+                                   "按列表顺序轮着刷）", 0)
+                return
+
+            ctitle = chapter.get("title", "")
+            csub = chapter.get("sub", "")
+            if entry == "weekday":
                 g.open_weekday(stop_check=self._stopped)
             else:
-                if not g.to_battle_list(stop_check=self._stopped):
-                    self.sig_done.emit(f"未进入戦場列表：{g.screens()}", 0)
+                if not g.to_battle_list(entry=entry, chapter_title=ctitle,
+                                        chapter_sub=csub, stop_check=self._stopped):
+                    self.sig_done.emit(f"未进入战场列表：{g.screens()}", 0)
                     return
+
+            # 把「每关刷几次」摊平成一条顺序队列：A×3 B×2 → A A A B B
+            plan = []
+            for _s in stages:
+                _t = max(1, int(_s.get("times", 1) or 1))
+                plan.extend([_s] * _t)
+            if not plan:
+                self.sig_done.emit("刷本计划是空的", 0)
+                return
+            log("  计划：" + " → ".join(
+                f"{s.get('title', '')}×{max(1, int(s.get('times', 1) or 1))}"
+                for s in stages))
 
             status("开始刷本")
             while (target == 0 or done < target) and not self._stopped():
@@ -400,7 +402,7 @@ class BotWorker(QThread):
                     break
                 self.sig_progress.emit(done, target if target else done + 1)
 
-                if not farmcore.ensure_battle_list(g, log, stage_type,
+                if not farmcore.ensure_battle_list(g, log, entry, chapter,
                                                    stop_check=self._stopped):
                     if self._stopped():
                         break
@@ -408,18 +410,23 @@ class BotWorker(QThread):
                     if not g.to_stage_select(stop_check=self._stopped):
                         self.sig_done.emit("重新导航失败", done)
                         return
-                    if stage_type == "weekday":
+                    if entry == "weekday":
                         g.open_weekday(stop_check=self._stopped)
-                    elif not g.to_battle_list(stop_check=self._stopped):
+                    elif not g.to_battle_list(entry=entry, chapter_title=ctitle,
+                                              chapter_sub=csub, stop_check=self._stopped):
                         self.sig_done.emit("重新导航失败", done)
                         return
 
+                stage = plan[done % len(plan)]
+                if len(plan) > 1:
+                    _t = max(1, int(stage.get("times", 1) or 1))
+                    log("  本轮目标：%s / %s%s" % (
+                        stage.get("title", ""), stage.get("sub", ""),
+                        "（这一关刷 %d 次）" % _t if _t > 1 else ""))
                 status(f"第 {done + 1} 轮" + (f"/{target}" if target else ""))
-                st = farmcore.run_once(g, done + 1, stage_title, keywords,
-                                       log, stop_check=self._stopped,
-                                       stage_type=stage_type,
-                                       stage_sub=cfg.get("stage_sub", ""),
-                                       stage_idx=cfg.get("stage_idx"),
+                st = farmcore.run_once(g, done + 1, stage, log,
+                                       stop_check=self._stopped,
+                                       entry=entry,
                                        pause_check=self.is_paused)
 
                 if st == "ok":
@@ -435,7 +442,7 @@ class BotWorker(QThread):
                     if self._stopped():
                         break
                     self.sig_status.emit("恢复中…")
-                    if not g.settle_to_list(stage_type=stage_type,
+                    if not g.settle_to_list(entry=entry, chapter_title=ctitle, chapter_sub=csub,
                                             stop_check=self._stopped):
                         self.sig_done.emit("恢复失败，已停止", done)
                         return
@@ -445,6 +452,53 @@ class BotWorker(QThread):
                     return
                 elif st == "retry":
                     continue
+                elif st == "no_cards":
+                    msg = ("这一话里没有可打的战场（剧情还没推过去？）"
+                           if entry != "weekday"
+                           else "曜日任務列表是空的（今天的关卡还没读取？）")
+                    fails += 1
+                    # 列表可能在切换途中还没实例化出来，先重建一次再下结论
+                    if fails >= 2:
+                        log(f"  ✗ {msg}")
+                        self.sig_done.emit(msg, done)
+                        return
+                    log(f"  ! 列表里没卡片，重建一次确认（{msg}）")
+                    if self._stopped():
+                        break
+                    if not g.settle_to_list(force_refresh=True, entry=entry, chapter_title=ctitle, chapter_sub=csub,
+                                            stop_check=self._stopped):
+                        self.sig_done.emit("恢复失败，已停止", done)
+                        return
+                elif st == "click_dead":
+                    # 列表里有卡片，但点了进不去：先分清是画面停了还是输入卡死
+                    alive = g.frame_alive()
+                    if alive is False:
+                        log("  ✗ 游戏画面不走了（窗口被最小化或被完全挡住），点不动")
+                        self.sig_done.emit(
+                            "游戏画面停住了：把游戏窗口露出来（别最小化）再点开始", done)
+                        return
+                    fails += 1
+                    log(f"  ✗ 点了没反应（连续 {fails} 次）")
+                    if fails >= 4:
+                        self.sig_done.emit("连续失败过多，已停止", done)
+                        return
+                    if fails >= 2 and not self._reloaded:
+                        self._reloaded = True
+                        log("  鼠标点击像是卡住了，重载页面自救一次…")
+                        if not g.reload_and_home():
+                            log("  重载后回不到主页面（登录状态可能失效了）")
+                            self.sig_done.emit(
+                                "重载页面后进不了游戏，请在浏览器窗口里重新登录一次再开", done)
+                            return
+                        log("  重载成功，重新进关卡列表")
+                        fails = 0
+                        continue
+                    if self._stopped():
+                        break
+                    if not g.settle_to_list(force_refresh=True, entry=entry, chapter_title=ctitle, chapter_sub=csub,
+                                            stop_check=self._stopped):
+                        self.sig_done.emit("恢复失败，已停止", done)
+                        return
                 else:
                     fails += 1
                     log(f"  ✗ 失败（连续 {fails} 次）")
@@ -453,7 +507,7 @@ class BotWorker(QThread):
                         return
                     if self._stopped():
                         break
-                    if not g.settle_to_list(force_refresh=True, stage_type=stage_type,
+                    if not g.settle_to_list(force_refresh=True, entry=entry, chapter_title=ctitle, chapter_sub=csub,
                                             stop_check=self._stopped):
                         self.sig_done.emit("恢复失败，已停止", done)
                         return
@@ -500,6 +554,11 @@ class BotWorker(QThread):
             log(traceback.format_exc(limit=3))
             self.sig_done.emit(f"出错：{e}", done)
         finally:
+            try:
+                if self.g is not None:
+                    self.g.release_mouse()   # 别把「按下」留给下一次
+            except Exception:
+                pass
             if keep:
                 _KEEP.append((pw, browser, ctx))
             elif pw is not None:

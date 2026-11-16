@@ -107,6 +107,19 @@ P_STORY_TAB = "scene/Canvas/UI/StageSelect/scrollView/storyBtn"
 P_CONTENT = "scene/Canvas/UI/StageSelect/scrollView/view/content"
 P_TEAM_START = "scene/Canvas/UI/Team/ChapterStartBtn/startBtn"
 
+# 选关界面顶部的副本入口：显示名 / 内部键 / topBtns 下的节点名
+# 加新入口只要在这里加一行，读取和导航都会自动支持
+ENTRIES = [
+    ("净化巡历", "junreki", "junrekiBtn"),      # 浄化巡歴，分话
+    ("四方山绘卷", "ayakashi", "ayakashiBtn"),  # あやかし討伐，进去标题是「四方山绘卷」
+    ("夏日祭典", "summer", "specialBtn1"),      # 期間限定1，里面是夏日祭典的历年活动
+    ("曜日任務", "weekday", "weekdayBtn"),      # 每天轮换，没有「话」这一层
+]
+ENTRY_NAME = {k: n for n, k, _ in ENTRIES}
+ENTRY_NODE = {k: node for _, k, node in ENTRIES}
+# 需要先选「话」再选关卡的入口；曜日任務入口点进去就是关卡列表
+CHAPTERED = tuple(k for _, k, _ in ENTRIES if k != "weekday")
+
 JS_LIB = r"""
 window.__gt = {
   root() { return cc.director.getScene(); },
@@ -584,6 +597,11 @@ class Game:
     def __init__(self, page, log=print):
         self.page = page
         self.log = log
+        # 最近一次 click_card_smart 收集到的卡片，失败时用来判断「列表本身是空的」
+        self._last_cards = []
+        # 当前战场列表属于哪个入口/哪一话，用来判断要不要重新导航
+        self._battle_list_of = None
+        self._chapter_list_of = None      # 当前章节列表属于哪个入口
 
     # ---------- 基础 ----------
     def js(self, expr, arg=None):
@@ -608,6 +626,39 @@ class Game:
             return self.js("__gt.activeButtons()")
         except Exception:
             return []
+
+    # ---------- 输入自检 ----------
+    def release_mouse(self):
+        """
+        松开可能残留的鼠标左键。
+        拖拽只发出了按下、抬起丢了（脚本被强杀、连接断开、down 之后抛异常），
+        游戏会一直等那次触摸结束，之后所有点击都被吞掉——PROGRESS 第四节第 11 条。
+        """
+        try:
+            self.page.mouse.up()
+            return True
+        except Exception:
+            return False
+
+    def frame_alive(self, seconds=1.0):
+        """
+        游戏帧数还在涨吗？
+        True=在跑 / False=画面停了（窗口最小化、被完全遮挡）/ None=读不到。
+        输入卡死时帧数照涨但点不动，靠这条把「冻住」和「点不动」分开。
+        """
+        try:
+            f1 = self.js("()=>cc.director.getTotalFrames()")
+            self.page.wait_for_timeout(int(seconds * 1000))
+            f2 = self.js("()=>cc.director.getTotalFrames()")
+            if not isinstance(f1, (int, float)) or not isinstance(f2, (int, float)):
+                return None
+            return f2 > f1
+        except Exception:
+            return None
+
+    def last_card_count(self):
+        """最近一次 click_card_smart 看到的卡片数：0 说明列表本身就是空的"""
+        return len(self._last_cards or [])
 
     def is_active(self, path):
         try:
@@ -667,6 +718,8 @@ class Game:
         reuse=True 时，如果当前页面已经在游戏里就不重新导航（普通模式用，
         避免把用户已经打开的页面刷掉）。
         """
+        self._battle_list_of = None      # 页面一旦重来，之前的战场列表结论就作废
+        self._chapter_list_of = None
         if not (reuse and "tamacolle" in (self.page.url or "")):
             self.page.goto(SWITCH, wait_until="domcontentloaded", timeout=90000)
         for _ in range(120):
@@ -687,9 +740,20 @@ class Game:
                      "Result", "ResultGamen", "Garden", "Syouen")
             try:
                 sc = self.screens() or []
-                if any(k in sc for k in known):
+                # 除了「新闻/公告」这些常驻层，只要还有别的界面就算在游戏里。
+                # 以前只认上面几个名字，一旦玩家进了商店/澡堂/远征之类，
+                # 这里就以为「不在游戏里」→ page.goto 重载，看着像游戏反复重启。
+                in_game = any(not str(s).lower().startswith("news") for s in sc)
+                if any(k in sc for k in known) or in_game:
                     self.log(f"    已在游戏内({sc})，跳过标题等待")
                     return True
+                # 界面还没出来可能只是加载慢，先等一会儿再决定要不要重载
+                for _ in range(15):
+                    self.page.wait_for_timeout(1000)
+                    sc = self.screens() or []
+                    if any(not str(s).lower().startswith("news") for s in sc):
+                        self.log(f"    界面已就绪({sc})，跳过标题等待")
+                        return True
                 self.log(f"    当前没有可用界面{sc}，重新加载游戏")
                 self.page.goto(SWITCH, wait_until="domcontentloaded", timeout=90000)
                 for _ in range(120):
@@ -882,60 +946,227 @@ class Game:
             self.page.wait_for_timeout(1000)
         return None
 
-    def to_battle_list(self, chapter_keyword="はじまりの旅", stop_check=None):
-        """StageSelect -> 净化巡历 -> 章节 -> 戦闘 -> 戦場列表（带轮询与重试）"""
-        # 已经在戦場列表就直接用，不要重新导航一遍
-        try:
-            st = self.js("__gt.stageState()") or {}
-            if st.get("type") == 2 and (self.js("__gt.cards()") or []):
+    # ---------- 副本入口 / 章节 ----------
+    def entry_btn_path(self, entry="junreki"):
+        return "scene/Canvas/UI/StageSelect/topBtns/%s" % ENTRY_NODE.get(entry, "junrekiBtn")
+
+    def back_to_entry_menu(self, stop_check=None):
+        """
+        把选关界面退回最外层（顶部一排入口按钮那层）。
+        选关共三层：入口菜单 → 某入口的章节列表 → 某章的战场列表。
+        一层一层按 backBtn 退，「有入口按钮但没有卡片」就是最外层。
+        """
+        for _ in range(4):
+            if stop_check is not None and stop_check():
+                return False
+            try:
+                st = self.js("__gt.stageState()") or {}
+                cards = self.js("__gt.cards()") or []
+            except Exception:
+                return False
+            if not self.ui_active("StageSelect"):
+                return False
+            if st.get("type") == 0 and not cards:
                 return True
+            # 只用 backBtn 一层层退。chapterBase/firstMenuBtn（ChapterBackParentBtn）
+            # 是「回主菜单」，一按直接回主页，别用
+            self.press("scene/Canvas/UI/StageSelect/backBtn")
+            # 等界面真的变了再看下一轮，别在过渡期间连按
+            t0 = time.time()
+            while time.time() - t0 < 3.5:
+                self.page.wait_for_timeout(300)
+                if stop_check is not None and stop_check():
+                    return False
+                if not self.ui_active("StageSelect"):
+                    return False
+                st = self.js("__gt.stageState()") or {}
+                cards = self.js("__gt.cards()") or []
+                if st.get("type") == 0 and not cards:
+                    return True
+        return False
+
+    def _has_cards(self) -> bool:
+        try:
+            return bool(self.js("__gt.cards()") or [])
         except Exception:
-            pass
+            return False
+
+    def _wait_chapter_list(self, timeout=20, stop_check=None) -> bool:
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if stop_check is not None and stop_check():
+                return False
+            st = self.js("__gt.stageState()") or {}
+            if st.get("type") == 0 and self._has_cards():
+                self.page.wait_for_timeout(900)      # 等列表把卡片实例化齐
+                return True
+            self.page.wait_for_timeout(1000)
+        return False
+
+    def open_entry(self, entry="junreki", stop_check=None):
+        """退回最外层 → 点进指定入口 → 等章节列表出现（失败就回主页重来一次）"""
+        if entry == "weekday":
+            if not self.ui_active("StageSelect"):
+                self.to_home()
+                if not self.to_stage_select(stop_check=stop_check):
+                    return False
+            return self.open_weekday(stop_check=stop_check)
+
+        name = ENTRY_NAME.get(entry, entry)
+        for attempt in (1, 2):
+            if stop_check is not None and stop_check():
+                return False
+            # 已经在这个入口的章节列表上就别再绕一圈
+            if self._chapter_list_of == entry:
+                st = self.js("__gt.stageState()") or {}
+                if st.get("type") == 0 and self._has_cards():
+                    return True
+
+            if not self.ui_active("StageSelect"):
+                self.to_home()
+                if not self.to_stage_select(stop_check=stop_check):
+                    continue
+
+            if self.back_to_entry_menu(stop_check):
+                self.press(self.entry_btn_path(entry))
+                ok = self._wait_chapter_list(timeout=8, stop_check=stop_check)
+                if not ok:
+                    # 有的入口按钮 handler 会抛异常（比如期間限定），press 打不开就点坐标
+                    xy = self.js("(p)=>__gt.clickXY(p)", self.entry_btn_path(entry))
+                    if xy:
+                        self.log(f"      press 没打开「{name}」，改点坐标 ({xy[0]:.0f},{xy[1]:.0f})")
+                        self.page.mouse.click(xy[0], xy[1])
+                        ok = self._wait_chapter_list(timeout=12, stop_check=stop_check)
+                        if not ok:
+                            xy2 = self.js("(p)=>__gt.clickXY(p)", self.entry_btn_path(entry))
+                            if xy2:      # 再点一次（第一次可能只是把界面唤醒）
+                                self.page.mouse.click(xy2[0], xy2[1])
+                                ok = self._wait_chapter_list(timeout=12, stop_check=stop_check)
+                if ok:
+                    self._chapter_list_of = entry
+                    return True
+
+            self.log(f"      第{attempt}次没进「{name}」，回主页重走")
+            self._chapter_list_of = None
+            self.to_home()
+        return False
+
+    @staticmethod
+    def _clean_cards(cards):
+        """收集到的卡片里混着「戻る」这种返回按钮节点，去掉"""
+        skip = {"戻る", "もどる", "返回"}
+        out = []
+        for i, c in enumerate(cards):
+            title = str(c.get("title") or "").strip()
+            sub = str(c.get("sub") or "").strip()
+            if not title or title in skip:
+                continue
+            out.append({"title": title, "sub": sub, "idx": i})
+        return out
+
+    def read_chapters(self, entry="junreki", stop_check=None):
+        """进入口 → 滚动收集章节（话）列表：[{title, sub, idx}]"""
+        if not self.open_entry(entry, stop_check=stop_check):
+            return []
+        out = self._clean_cards(self.collect_all_cards(require_sub=False))
+        self.scroll_list_top()
+        return out
+
+    def read_stages(self, entry="junreki", chapter_title="", chapter_sub="",
+                    stop_check=None):
+        """进入口 → 点章节 → 切戦闘 → 滚动收集战场：[{title, sub, idx}]"""
+        if not self.enter_chapter(entry, chapter_title, chapter_sub, stop_check):
+            if entry == "weekday" and self.weekday_ready():
+                out = self._clean_cards(self.collect_all_cards(require_sub=False))
+                self.scroll_list_top()
+                return out
+            return []
+        # 列表是无限滚动、慢慢实例化的，读到空就再等一会儿重读几次
+        out = []
+        for _ in range(4):
+            if stop_check is not None and stop_check():
+                return out
+            out = self._clean_cards(self.collect_all_cards(require_sub=False))
+            if out:
+                break
+            self.page.wait_for_timeout(1200)
+        self.scroll_list_top()
+        return out
+
+    def enter_chapter(self, entry="junreki", chapter_title="", chapter_sub="",
+                      stop_check=None):
+        """进入口 → 点章节卡片 → 切到戦闘 → 等战场列表"""
+        if entry == "weekday":
+            return self.open_weekday(stop_check=stop_check)
+        # 已经停在想要的战场列表上就别再导航（读关卡之后经常就是这个状态）
+        if self._battle_list_of == (entry, chapter_title, chapter_sub):
+            st = self.js("__gt.stageState()") or {}
+            if st.get("type") == 2 and self._has_cards():
+                return True
+        if not self.open_entry(entry, stop_check=stop_check):
+            return False
+        if not chapter_title:
+            self.log("      没给章节名，无法进章节")
+            return False
+
+        xy = None
+        try:
+            xy = self.scroll_card_into_view(chapter_title, chapter_sub or "")
+        except Exception:
+            xy = None
+        if not xy:
+            # 精确标题没命中就按关键词模糊找（汉化文本可能差一两个字）
+            hit = self._wait_card([chapter_title], 8, stop_check=stop_check)
+            if hit:
+                xy = hit.get("xy")
+        if not xy:
+            self.log(f"      找不到章节卡片「{chapter_title}」，screens={self.screens()}")
+            return False
+
+        self.page.mouse.click(xy[0], xy[1])
+        self.page.wait_for_timeout(2500)
+
+        tg = self.js("__gt.toggles()") or {}
+        if tg.get("battle"):
+            self.click(P_BATTLE_TAB, "戦闘")
+        else:
+            r = self.call("Buttons", "ChapterBattleBtn")
+            self.log(f"      戦闘切换未出现，调用 ChapterBattleBtn {r}")
+
+        t0 = time.time()
+        while time.time() - t0 < 25:
+            if stop_check is not None and stop_check():
+                return False
+            st = self.js("__gt.stageState()") or {}
+            if st.get("type") == 2:
+                self.page.wait_for_timeout(900)
+                self._battle_list_of = (entry, chapter_title, chapter_sub)
+                return True
+            self.page.wait_for_timeout(1000)
+        self.log(f"      没进入战场列表，screens={self.screens()}")
+        return False
+
+    def to_battle_list(self, entry="junreki", chapter_title="", chapter_sub="",
+                       stop_check=None):
+        """确保停在「某个入口、某一话」的战场列表上（带重试）"""
+        want = (entry, chapter_title, chapter_sub)
+        if self._battle_list_of == want:
+            try:
+                st = self.js("__gt.stageState()") or {}
+                if st.get("type") == 2 and (self.js("__gt.cards()") or []):
+                    return True
+            except Exception:
+                pass
 
         for attempt in range(1, 4):
             if stop_check is not None and stop_check():
                 return False
-            if self.ui_active("StageSelect"):
-                self.press(P_JUNREKI)
-                self.page.wait_for_timeout(2000)
-
-            card = self._wait_card([chapter_keyword], 25, stop_check=stop_check)
-            if not card:
-                self.log(f"      第{attempt}次：未找到章节卡片，screens={self.screens()}")
-                continue
-
-            # 章节卡片也可能在列表下方，先滚进来再点
-            try:
-                xy = self.scroll_card_into_view(chapter_keyword)
-            except Exception:
-                xy = None
-            if xy:
-                card = {"xy": xy}
-            self.page.mouse.click(card["xy"][0], card["xy"][1])
-            self.page.wait_for_timeout(2500)
-
-            tg = self.js("__gt.toggles()") or {}
-            if tg.get("battle"):
-                self.click(P_BATTLE_TAB, "戦闘")
-                self.page.wait_for_timeout(2500)
-            else:
-                r = self.call("Buttons", "ChapterBattleBtn")
-                self.log(f"      戦闘切换未出现，调用 ChapterBattleBtn {r}")
-                self.page.wait_for_timeout(2000)
-
-            # 等戦場列表出现
-            t0 = time.time()
-            while time.time() - t0 < 25:
-                if stop_check is not None and stop_check():
-                    return False
+            if self.enter_chapter(entry, chapter_title, chapter_sub, stop_check):
                 st = self.js("__gt.stageState()") or {}
-                cards = self.js("__gt.cards()") or []
-                if st.get("type") == 2 and len(cards) > 0:
-                    self.log(f"      stageState={st} 卡片={len(cards)}")
-                    return True
-                self.page.wait_for_timeout(1000)
-
-            self.log(f"      第{attempt}次：未进入戦場列表，screens={self.screens()}")
+                self.log(f"      已进战场列表 stageState={st}")
+                self._battle_list_of = want
+                return True
+            self.log(f"      第{attempt}次：没进战场列表，screens={self.screens()}")
 
         return False
 
@@ -1349,6 +1580,7 @@ class Game:
             cands = self.collect_all_cards()
         except Exception as e:
             self.log(f"      收集列表失败: {e}")
+        self._last_cards = cands
 
         best = None
         best_score = -1
@@ -1909,18 +2141,20 @@ class Game:
         return self.ui_active("StageSelect")
 
     def settle_to_list(self, max_tries=5, force_refresh=False,
-                       stage_type="junreki", stop_check=None):
+                       entry="junreki", chapter_title="", chapter_sub="",
+                       stop_check=None):
         """
         把游戏拉回「关卡列表」。
-        stage_type=weekday 时走曜日任務入口——以前这里固定跑净化巡历，
-        刷曜日任務时永远找不到「はじまりの旅」章节卡片，白等好几分钟。
+        以前这里固定跑净化巡历第一话，刷曜日任務时永远找不到「はじまりの旅」章节卡片，
+        白等好几分钟；现在按 entry + 话 回到对应列表。
         force_refresh=True 时即使已在列表也重建一次（应对滚动位置错乱）。
         stop_check 为真时立刻退出，别让用户按了停止还在那儿导航。
         """
         def back_to_list():
-            if stage_type == "weekday":
+            if entry == "weekday":
                 return self.open_weekday(stop_check=stop_check)
-            return self.to_battle_list(stop_check=stop_check)
+            return self.to_battle_list(entry=entry, chapter_title=chapter_title,
+                                       chapter_sub=chapter_sub, stop_check=stop_check)
 
         for i in range(max_tries):
             if stop_check is not None and stop_check():

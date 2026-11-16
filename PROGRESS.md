@@ -1,7 +1,7 @@
 # にじたま 工具箱 —— 项目交接文档
 
 > 给「重新开始一个会话的 AI」看。
-> 最后更新：2026-11-14，版本 **1.6.4**
+> 最后更新：2026-11-16，版本 **1.8.8**
 > 新会话请先读完这份 + `CHANGELOG.md`，就能直接接手。
 
 ---
@@ -61,13 +61,15 @@ nijitama-farm/
 
 ---
 
-## 三、当前功能（v1.6.4）
+## 三、当前功能（v1.8.8）
 
 | 模块 | 说明 |
 |---|---|
 | 启动游戏 | CDP 9222 驱动系统 Chrome/Edge，窗口小/全屏，声音开关 |
-| 刷本 | 净化巡历（内置 7 关）/ 曜日任務（读取当天列表），次数/间隔 |
+| 刷本 | 四个入口（净化巡历/四方山绘卷/夏日祭典/曜日任務），话和关卡从游戏里读 |
+| 刷本计划 | 勾多关后成一行小方块（序号/次数/拖动/✕ 取消）；场次=计划总次数，跑一遍就停 |
 | 暂停 | 立刻停手，本场由游戏自己打完停在结算界面；点「继续」先结算再接着刷 |
+| 点不动自愈 | 关卡点了进不去 → 重建列表 → 重载自救（每场一次）；窗口冻结/没战场直接提示 |
 | 曜日提醒 | **每天弹窗一次**问是否刷新（不再自动静默读取）|
 | 汉化适配 | 中日文双语的卡片匹配 + 序号兜底 |
 | 设置 | 窗口大小、声音、无头、GPU、清理浏览器缓存 |
@@ -139,6 +141,80 @@ Cocos 的逻辑全挂在 rAF 上，于是一起冻住。
 `CalculateNativeWinOcclusion,IntensiveWakeUpThrottling`。
 **最小化仍然会停**，那是真 hidden，参数救不回来。
 
+### 11. 输入卡死：鼠标只按下没松开，之后点什么都没反应Cocos 的点击靠「按下 → 抬起」配对。一次拖拽如果只发出按下、抬起丢失了
+（脚本被强杀、Playwright 连接断开、`mouse.down()` 后抛异常都可能），
+游戏内部会一直认为有一根手指还按着，之后所有点击都被当成那次拖拽的延续被吞掉。
+
+表现很有欺骗性：画面照常在动（rAF 一秒 160 多帧）、按钮看着正常、
+`pointerdown / mousedown / mouseup / click` 事件全都正常到达 canvas，但界面毫无反应。
+关掉 `fade`、`mekakushiUD/L/R` 这些遮罩也没用——不是遮罩挡的。
+**`press()`（直接调按钮 handler）不受影响**，所以脚本还能导航，
+失效的只是所有靠鼠标坐标的点击：卡片、返回、出陣。
+
+唯一可靠的恢复办法是重载页面（`reload_and_home()`），把游戏的输入状态整个重置。
+2026-11-16 实测：卡住后无论 `mouse.up()`、关遮罩还是换新连接点，都不恢复；
+`page.reload()` 之后点 MENU 立刻正常。
+
+**1.6.5 起的处理**（改代码时别把这几条弄丢）：
+- `Game.release_mouse()`：连接游戏后、以及 worker 的 `finally` 里各补一次 `mouse.up()`，
+  正常退出路径不会再留下「按下」；被 SIGKILL 强杀时 finally 不执行，这一档挡不住
+- 关卡点了进不去（`farmcore.run_once` 返回 `click_dead`）时：
+  第 1 次 → `settle_to_list(force_refresh=True)` 重建列表；
+  第 2 次 → `reload_and_home()` 重载自救，整场刷本只重载一次（`BotWorker._reloaded`）
+- 重载前先用 `Game.frame_alive()` 读 `cc.director.getTotalFrames()` 有没有在涨：
+  不涨说明是窗口最小化/被完全遮挡，直接提示停手，不白重载
+- 列表 0 张卡（`no_cards`）先重建一次确认，还是空就直接说「这一话没有可打的战场」
+
+### 12. 副本入口 → 话 → 关卡（1.7.0 起的结构）
+
+选关界面是三层，判定只看 `stageState().type`：
+
+| 层 | 判定 | 内容 |
+|---|---|---|
+| 入口菜单 | `type == 0` 且没卡片 | 顶部一排入口按钮（`topBtns/*`）|
+| 章节列表 | `type == 0` 且有卡片 | 每话一张卡（`texts[0]` 话名、`texts[1]` 副标题）|
+| 战场列表 | `type == 2` | 每关一张卡（`texts[0]` 关卡名、`texts[1]` 战场名）|
+
+入口表在 `gamebot.ENTRIES`（显示名 / 内部键 / 节点名），加新入口只要加一行：
+
+```python
+("净化巡历", "junreki", "junrekiBtn"),       # 浄化巡歴
+("四方山绘卷", "ayakashi", "ayakashiBtn"),   # あやかし討伐，进去标题才是「四方山绘卷」
+("夏日祭典", "summer", "specialBtn1"),       # 期間限定1
+("曜日任務", "weekday", "weekdayBtn"),       # 没有「话」这一层
+```
+
+流程：`open_entry()` 退到入口菜单 → 点入口 → 等章节列表 →
+`enter_chapter()` 点话卡 → 切戦闘 → 等 `type == 2`。
+
+- `read_chapters()` / `read_stages()` 是读取入口，都走同一套导航 + `collect_all_cards()` 滚动收集
+- 卡片文字第 4 个字段（时间/地名/倒计时）是节点复用的残留，**不能当数据**，只认前两个
+- 收集结果里会混进「戻る」返回按钮节点，`_clean_cards()` 会剔掉
+- `_chapter_list_of` / `_battle_list_of` 记着「现在停在哪」，命中就不重复导航；
+  `boot()` 和重载后要清零
+- 关卡序号 `idx` 是**当前话战场列表里的位置**，跟读到的列表一起存，不再跨话通用
+
+### 13. 刷本计划（1.8.0 起）
+
+- 界面：lst_stages（CheckList：点整行切勾选，不选中所以不滚动）+ 计划区 PlanChip 两列网格
+  （序号 / 关卡名 / 次数 / ✕），**竖向滚动，一屏两行半**（高度 90）
+- 拖动时**边缘自动滚**：`_auto_timer`（30 ms）在指针进入视口上下 18 px 时按距离滚 2~14 px，
+  滚完重算高亮。只靠 mousemove 事件驱动是不够的——指针停着不动就滚不起来
+- 存法：`entries[entry].selected[章节键] = [{title, sub, times}, ...]`，**数组顺序就是刷本顺序**
+- 顺序模式：`stage_order` = `picked`（默认，按勾选先后，**拖动**调）/ `list`（按关卡列表顺序，拖动禁用）
+- 拖动：`PlanChip` 自己看按下/移动/抬起，松手把全局坐标交给 `_chip_moved` 算落在哪个方块上；
+  **两个方块直接对调**（`sel[src], sel[tgt] = sel[tgt], sel[src]`），不是把后面整串挪一格；
+  **不要**用 Qt 的拖放框架（InternalMove 会在拖完再删一次源行，第 1.8.2 版就栽在这上面）
+- 勾选逻辑：勾上追加到末尾，取消摘掉，已有 `times` 保留
+- 摊平在 `worker.py`：`plan = [关卡 × times …]`，然后 `plan[done % len(plan)]`；
+  `runs` 由计划自动求和（1.8.1 起没有手填的刷本次数），跑完一遍就停
+- `CheckList.mousePressEvent` 故意不调父类，一次解决三件事：不触发「选中」→ 不自动滚动、
+  不用瞄准小方框、也不会出现「Qt 勾一次 + 自己勾一次」的二次切换
+- 次数框是 `ChipSpinBox`（1.8.8 起）：`focusInEvent` 里 `QTimer.singleShot(0, selectAll)`
+  （直接 selectAll 会被随后的光标定位覆盖），`mousePressEvent` 只在点中 lineEdit 区域时全选
+  （点上下箭头不该全选）；`Qt.NoContextMenu` 要同时设在 QSpinBox 和它的 `lineEdit()` 上，
+  只设外层右键还有菜单
+
 ---
 
 ## 五、踩过的坑（别再踩）
@@ -162,6 +238,10 @@ Cocos 的逻辑全挂在 rAF 上，于是一起冻住。
 | 15 | 窗口被挡住游戏就不动 | Chrome 遮罩检测→判 hidden→rAF 停；启动参数禁 occlusion 与 timer 节流（最小化仍会停） |
 | 16 | 游戏画面偶发冻住 | 独显直连 + `--use-angle=d3d11` 下驱动重置（`nvlddmkm` Id 153）；显卡模式改三档，默认 auto 不加 GPU 参数 |
 | 17 | 改了参数一边生效一边没有 | 启动参数曾在 `spawn_chrome()` 和【启动游戏】各拼一份，1.6.2 只改了一边。现在统一走 `gamebot.chrome_args()` |
+| 18 | 脚本被强杀后游戏点什么都没反应，人手点也没用 | 拖拽只发了按下、抬起丢了，Cocos 一直等那次触摸结束。重载页面才能恢复（见第四节第 11 条） |
+| 19 | 退层时按 `chapterBase/firstMenuBtn`，游戏直接回主页 | 那个按钮（`ChapterBackParentBtn`）是「回主菜单」，不是回上一层。只用 `backBtn` 一层层退，且等界面真的变了再按下一层 |
+| 20 | 写死的关卡标题装了汉化就对不上 | 原来是日文原文 + 序号兜底在跑。1.7.0 起列表从游戏里读，读到的就是显示文字，语言无关 |
+| 21 | 点靠下的关卡，列表自己往上滚 | QListWidget 选中某项时会把它滚到完整可见。自己处理 mousePressEvent、不走选中，顺带做到「点整行就勾」（CheckList）|
 
 ---
 
@@ -183,21 +263,32 @@ Cocos 的逻辑全挂在 rAF 上，于是一起冻住。
 
 ---
 
-## 七、当前配置（data/config.json）
+## 七、当前配置（data/config.json，config_version = 2）
 
 ```json
 {
-  "stage_type": "weekday",          // junreki / weekday
-  "stage_title": "...", "stage_sub": "...",
-  "stage_idx": 0,                   // 关卡在列表中的序号（汉化兜底）
-  "lang_mode": "auto",              // auto / ja / zh（目前 auto 即可）
-  "runs": 5, "interval": 2.0,
+  "config_version": 2,
+  "entry": "junreki",               // junreki / ayakashi / summer / weekday
+  "entries": {
+    "junreki": {
+      "chapters": [ {...} ],        // 读到的话，新的在前
+      "chapter": {"title": "...", "sub": "第一话"},
+      "stage_lists": {"<标题\0副标题>": [ {"title","sub","idx"} ]},
+      "selected":    {"<标题\0副标题>": [ {"title","sub"} ]}   // 勾了要刷的，按勾选顺序
+    },
+    "ayakashi": { ... }, "summer": { ... },
+    "weekday": {"stages": [...], "selected": [...], "day": "2026-11-16"}
+  },
+  "chapter": {"title": "...", "sub": "第一话"},   // 运行中要刷的那一话
+  "stages": [ {"title","sub","idx"} ],            // 运行中要轮刷的关卡（按顺序）
+  "lang_mode": "auto", "runs": 5, "interval": 2.0,
   "mode": "attach", "after": "keep",
-  "weekday_stages": [...],          // 当天读到的关卡
-  "weekday_day": "2026-11-08",      // 缓存属于哪个游戏日
-  "weekday_remind_day": "2026-11-09" // 哪天弹过提醒
+  "weekday_remind_day": "2026-11-09"
 }
 ```
+
+读写的入口：`config.get_entry / entry_stages / entry_selected / set_entry_selected`，
+别直接动 `entries` 里的键。
 
 游戏日 = `(now + 1h).strftime("%Y-%m-%d")`（23:00 重置）
 
@@ -248,6 +339,7 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 | 同账号不能双开 | bot 和手动浏览器共用 profile |
 | 打包版不自动更新 | 改代码要重新打包，源码版才实时 |
 | 界面滑动观感一般 | 为了定位准确故意放慢，不要轻易改 |
+| 脚本被强杀后可能点不动 | 触摸卡在「按下」状态，人手点也没用；重载页面恢复（见第四节第 11 条）|
 
 ---
 
@@ -282,9 +374,26 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 
 ---
 
-## 十二、交接状态（2026-11-14）
+## 十二、交接状态（2026-11-16）
 
-**当前**：版本 1.6.2，已发布到 GitHub Release（full + update 两个包），工作区干净。
+**当前**：版本 **1.8.8**（源码已改，**未打包、未提交、未发版**）。
+`dist/` 里躺着的是 1.7.1 的包，**已经过时，别拿去试新界面**；线上最新 Release 还是 1.6.4。
+
+**这轮改了什么（1.6.5 → 1.8.8，全在源码里）**
+
+- 1.6.5：输入卡死自救（`release_mouse` / `frame_alive` / 点不动就重载一次）
+- 1.7.0：副本改成「入口 → 话 → 关卡」三层，**关卡列表改为从游戏里读**，配置迁到 v2
+- 1.7.1~1.7.3：UI 修补（深色列表、字号 +2、勾选框蓝底白勾、列表宽度 420、按钮不截字）
+- 1.8.0~1.8.8：刷本计划（每关次数、拖动对调、chip 两列网格、拖动高亮）
+- 顺手修掉的坑：#18 输入卡死、#19 `firstMenuBtn` 是回主菜单、#20 汉化后硬编码标题对不上、
+  #21 列表选中会自动滚动；`boot(reuse=True)` 不再把商店/澡堂当成「不在游戏里」而重载页面
+
+**怎么快速看效果**：桌面快捷方式「にじたま 工具箱」跑的是**源码**（`pythonw app.py`），
+改完保存、关掉再双击就是新的，标题栏显示版本号。项目根还有个同作用的
+`启动源码版（免打包）.lnk`。**不要**用 `dist/` 里的 exe 试新界面。
+
+**下一轮接着做**：等他验收 1.8.8 的界面；验收没问题就打包发版
+（升版本号 → CHANGELOG → 功能说明两份 → README 更新日志表 → 打 full/update 两个 zip）。
 
 **最近几版做了什么**
 
@@ -295,6 +404,22 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 | 1.6.0 | 新增暂停/继续 |
 | 1.6.1 | 暂停改成「立刻停手，本场自己打完」 |
 | 1.6.2 | 关掉 Chrome 遮挡检测与定时器节流，窗口被挡住不再冻结 |
+| 1.6.3 | 会话日志 `data/session.log`（512KB 自动裁剪）+【日志】页「会话日志」按钮 |
+| 1.6.4 | 启动参数统一走 `gamebot.chrome_args()`；显卡渲染改三档（自动/独显/软件）|
+| 1.6.5 | 补 `release_mouse()` + 点不动时重载自救；`frame_alive()` 分清冻结与输入卡死 |
+| 1.7.0 | 入口/话/关卡三层，列表改为读取，配置 v2，可勾多关轮刷 |
+| 1.7.1 | 关卡列表补深色样式（原来白底浅灰字）+ 最小高度 |
+| 1.7.2 | 字号整体 +2；任务设置靠左；读取按钮自适应宽度不再截字 |
+| 1.7.3 | 勾选框改蓝底白勾；关卡列表宽度 420，右边按钮不动 |
+| 1.8.0 | 刷本计划表（每关次数/顺序）；CheckList 点整行勾选、不再自动滚动 |
+| 1.8.1 | 次数改成数字框；计划表与列表左对齐、表高按实际行算；删旧刷本次数、间隔挪进运行模式 |
+| 1.8.2 | 已选关卡改成拖动排序（PlanTable 自己处理 dropEvent），删掉 ▲▼ 按钮 |
+| 1.8.3 | 拖动改用 DragDrop+Copy（不然 Qt 会二次删行）；boot 不再把商店等界面误判成「不在游戏里」而重载 |
+| 1.8.4 | 计划区从表格换成 chip（PlanChip，自己处理拖动），省一整张表 |
+| 1.8.5 | chip 改两列网格、竖向滚动；横向滚动条关掉（会压字）|
+| 1.8.6 | 拖动时高亮目标 chip（ChipDrop 样式）；数字框 46x20、方块高 28 |
+| 1.8.7 | 拖动改成两关直接对调（swap），不再是插到别处顺移；拖动只高亮那一个目标 |
+| 1.8.8 | 计划区高度 70→90（露半行）；拖到边缘自动滚（QTimer 30ms）；次数框点一下全选、去右键菜单 |
 
 **环境**：Python 3.11.9（Store 版）、PySide6 6.12、PyInstaller 6.22。
 git 走 `~/.dsh/git.ps1`（GitHub Desktop 自带 2.56）；发布用 `~/.dsh/ghtoken.ps1`

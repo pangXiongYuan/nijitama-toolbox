@@ -20,12 +20,15 @@ from PySide6.QtGui import (QColor, QFont, QIcon, QLinearGradient, QPainter,
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFrame, QHBoxLayout,
-    QLabel, QMainWindow, QPlainTextEdit, QProgressBar,
-    QPushButton, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser,
+    QAbstractItemView, QAbstractSpinBox, QGridLayout, QHeaderView, QLabel,
+    QListWidget, QListWidgetItem,
+    QMainWindow, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
 import config
+import gamebot
 import paths
 import sessionlog
 from version import APP_NAME, VERSION
@@ -35,17 +38,9 @@ ASSETS = paths.ASSETS_DIR
 GAME_URL = "https://nijitama.app/switchSession/tamacolle"
 CDP_PORT = 9222
 
-STAGES = [
-    # (显示名, 标题, 关键词, 副标题, 列表序号)
-    # 序号是「关卡列表里第几张」，汉化后标题变中文时用它兜底定位
-    ("武蔵国 江戸 火事（战场 其之四）", "武蔵国\u3000江戸\u3000火事", ["江戸", "火事"], "戦場\u3000其の四", 3),
-    ("武蔵国 江戸（战场 其之三）", "武蔵国\u3000江戸", ["武蔵国", "江戸"], "戦場\u3000其の三", 4),
-    ("甲斐国 笹子峠（战场 其之二）", "甲斐国\u3000笹子峠", ["甲斐国", "笹子峠"], "戦場\u3000其の二", 5),
-    ("信濃国 下諏訪（战场 其之一）", "信濃国\u3000下諏訪", ["信濃国", "下諏訪"], "戦場\u3000其の一", 6),
-    ("武蔵国 江戸 高難度（高难度战场 其之一）", "武蔵国\u3000江戸\u3000高難度", ["高難度"], "高難度戦場\u3000其の一", 2),
-    ("甲斐国 笹子峠 高難度（高难度战场 其之二）", "甲斐国\u3000笹子峠\u3000高難度", ["高難度"], "高難度戦場\u3000其の二", 1),
-    ("武蔵国 江戸（素材获得战场）", "武蔵国\u3000江戸", ["素材獲得"], "素材獲得戦場（栄養丸・雄々しい角）", 0),
-]
+# 副本入口（显示名 / 内部键）都在 gamebot.ENTRIES 里，界面只读那张表
+ENTRIES = gamebot.ENTRIES
+CHAPTERED = gamebot.CHAPTERED
 
 WINDOW_PRESETS = [
     ("small", "小窗口（960 × 540）", 960, 540, False),
@@ -168,6 +163,152 @@ class ToggleSwitch(QWidget):
         x = r.right() - d - 3 if self._on else r.left() + 3
         p.setBrush(QColor("#ffffff"))
         p.drawEllipse(QRectF(x, r.top() + 3, d, d))
+
+
+class CheckList(QListWidget):
+    """
+    点整行就能勾选的列表。
+    自己处理按下事件、不交给父类：父类会把点击变成「选中」，
+    选中又会让 Qt 自动把该项滚到完整可见（点最后一行时列表就跳）。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setUniformItemSizes(True)
+
+    def mousePressEvent(self, e):
+        idx = self.indexAt(e.pos())
+        if idx.isValid():
+            it = self.item(idx.row())
+            if it is not None and (it.flags() & Qt.ItemIsUserCheckable):
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked
+                                 else Qt.Checked)
+                return              # 不调父类：没有选中，就不会自动滚动
+        super().mousePressEvent(e)
+
+
+class ChipSpinBox(QSpinBox):
+    """
+    计划方块里的次数框。
+    - 点进去就全选数字：QSpinBox 默认把光标放在点到的位置，经常落在数字前面，
+      敲一个数字就变成「新数字 + 旧数字」，得先自己挪光标
+    - 关掉右键菜单：这里只有复制/粘贴/全选这类标准项，用不上
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setContextMenuPolicy(Qt.NoContextMenu)
+        le = self.lineEdit()
+        if le is not None:
+            le.setContextMenuPolicy(Qt.NoContextMenu)
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        QTimer.singleShot(0, self.selectAll)   # 等光标落定再全选，不然会被随后的定位覆盖
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        le = self.lineEdit()
+        if (e.button() == Qt.LeftButton and le is not None
+                and le.geometry().contains(e.position().toPoint())):
+            self.selectAll()
+
+
+class PlanChip(QFrame):
+    """
+    刷本计划里的一个方块：序号 + 关卡名 + 次数 + 取消。
+    没走 Qt 的拖放框架：自己看按下/移动/抬起，松手时把全局坐标交给上层算落在哪个方块上，
+    这两个方块的位置直接对调（不是插入挪位），这样次数框一定跟着关卡走，
+    也不会出现模型被删两次的问题。
+    """
+
+    moved = Signal(int, object)        # 自己是第几个, 松手时的全局坐标
+    dragging = Signal(int, object)     # 拖的过程中，随时报自己在哪
+    removed = Signal(int)              # 自己是第几个
+    timesChanged = Signal(str, int)    # 关卡键, 新次数
+
+    def __init__(self, index, stage, times, draggable=True, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Chip")
+        self.index = index
+        self.key = config.ckey(stage)
+        self._draggable = draggable
+        self._press = None
+        self._moved = False
+        self._hint = False
+        self.setCursor(Qt.OpenHandCursor if draggable else Qt.ArrowCursor)
+
+        self.setFixedHeight(28)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 6, 3)
+        lay.setSpacing(6)
+
+        no = QLabel(str(index + 1))
+        no.setObjectName("ChipNo")
+        no.setFixedWidth(14)
+        no.setAlignment(Qt.AlignCenter)
+
+        name = QLabel(stage.get("title", ""))
+        name.setObjectName("ChipName")
+        name.setMaximumWidth(104)
+        if stage.get("sub"):
+            name.setToolTip("%s / %s" % (stage.get("title", ""), stage.get("sub")))
+
+        self.spin = ChipSpinBox()
+        self.spin.setObjectName("ChipSpin")
+        self.spin.setRange(1, 999)
+        self.spin.setValue(max(1, int(times)))
+        self.spin.setFixedWidth(46)
+        self.spin.setFixedHeight(20)
+        self.spin.setAlignment(Qt.AlignCenter)
+        self.spin.valueChanged.connect(lambda v: self.timesChanged.emit(self.key, v))
+
+        x = QPushButton("✕")
+        x.setObjectName("ChipX")
+        x.setFixedSize(18, 18)
+        x.setToolTip("取消这一关")
+        x.clicked.connect(lambda: self.removed.emit(self.index))
+
+        lay.addWidget(no)
+        lay.addWidget(name)
+        lay.addWidget(self.spin)
+        lay.addWidget(x)
+
+    def set_hint(self, on: bool):
+        """拖动时高亮「会插到这里」的方块"""
+        if self._hint == on:
+            return
+        self._hint = on
+        self.setObjectName("ChipDrop" if on else "Chip")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self._draggable:
+            self._press = e.position().toPoint()
+            self._moved = False
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press is not None:
+            if (e.position().toPoint() - self._press).manhattanLength() > 8:
+                self._moved = True
+            if self._moved:
+                self.dragging.emit(self.index,
+                                   self.mapToGlobal(e.position().toPoint()))
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._press is not None:
+            self.setCursor(Qt.OpenHandCursor if self._draggable else Qt.ArrowCursor)
+            if self._moved:
+                self.moved.emit(self.index,
+                                self.mapToGlobal(e.position().toPoint()))
+            self._press = None
+        super().mouseReleaseEvent(e)
 
 
 class Card(QFrame):
@@ -347,31 +488,31 @@ class Banner(QFrame):
 
 
 QSS = """
-QWidget { color: #d7dae0; font-size: 13px; }
+QWidget { color: #d7dae0; font-size: 15px; }
 QMainWindow, QWidget#Root { background: #1b1c1f; }
 QWidget#Sidebar { background: #16171a; border-right: 1px solid #23252a; }
-QLabel#AppTitle { color: #f0f2f5; font-size: 15px; font-weight: 600; padding: 4px 6px; }
+QLabel#AppTitle { color: #f0f2f5; font-size: 17px; font-weight: 600; padding: 4px 6px; }
 QLabel#AppVer {
-  color: #cfd6e2; font-size: 11.5px; background: #262a31;
+  color: #cfd6e2; font-size: 13px; background: #262a31;
   border: 1px solid #343a45; border-radius: 7px; padding: 2px 9px;
 }
 
 QPushButton#Nav {
   text-align: left; padding: 9px 12px; border: none; border-radius: 8px;
-  color: #9aa1ad; font-size: 13.5px;
+  color: #9aa1ad; font-size: 15.5px;
 }
 QPushButton#Nav:hover { background: #202226; color: #e8eaee; }
 QPushButton#Nav:checked { background: #262a31; color: #ffffff; font-weight: 600; }
 
 QFrame#Card { background: #24262b; border: 1px solid #2c2f35; border-radius: 10px; }
-QLabel#CardTitle { color: #eceef2; font-size: 13.5px; }
-QLabel#CardSub { color: #858c99; font-size: 11.5px; }
+QLabel#CardTitle { color: #eceef2; font-size: 15.5px; }
+QLabel#CardSub { color: #858c99; font-size: 13.5px; }
 
 QFrame#Banner { border-radius: 12px; }
 
 QPushButton#Primary {
   background: #3d6ff2; color: #ffffff; border: none; border-radius: 8px;
-  padding: 9px 18px; font-size: 13px;
+  padding: 10px 18px; font-size: 15px;
 }
 QPushButton#Primary:hover { background: #4d7cff; }
 QPushButton#Primary:disabled { background: #32353b; color: #6b7280; }
@@ -385,7 +526,7 @@ QPushButton#Ghost:disabled { color: #6b7280; }
 
 QComboBox, QSpinBox, QDoubleSpinBox {
   background: #1e2024; border: 1px solid #32353c; border-radius: 7px;
-  padding: 6px 10px; min-height: 20px; color: #e3e6ea;
+  padding: 7px 10px; min-height: 22px; color: #e3e6ea;
 }
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { border-color: #454a53; }
 QComboBox::drop-down { border: none; width: 22px; }
@@ -395,6 +536,48 @@ QComboBox QAbstractItemView {
   background: #23252a; border: 1px solid #34383f; selection-background-color: #3d6ff2;
   color: #e3e6ea; outline: none;
 }
+
+QListWidget {
+  background: #1e2024; border: 1px solid #32353c; border-radius: 7px;
+  color: #e3e6ea; padding: 4px; outline: none;
+}
+QListWidget::item { padding: 4px 6px; border-radius: 5px; }
+QListWidget::item:hover { background: #262a31; }
+QListWidget::item:selected { background: #2b3f6e; color: #ffffff; }
+QListWidget::indicator {
+  width: 15px; height: 15px; border: 1px solid #5b6270;
+  border-radius: 3px; background: #1b1c1f;
+}
+QListWidget::indicator:hover { border-color: #5b8bff; }
+QListWidget::indicator:checked {
+  background: #2f6bd6; border-color: #5b8bff;
+  image: url("@ASSETS@/icons/check-on.svg");
+}
+
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+QFrame#Chip {
+  background: #23262c; border: 1px solid #34383f; border-radius: 8px;
+}
+QFrame#Chip:hover { border-color: #4a505a; }
+QFrame#ChipDrop {
+  background: #26324a; border: 1px dashed #5b8bff; border-radius: 8px;
+}
+QSpinBox#ChipSpin {
+  background: #17181b; border: 1px solid #3a3f47; border-radius: 5px;
+  color: #e3e6ea; padding: 0px 2px; min-height: 16px;
+}
+QSpinBox#ChipSpin::up-button, QSpinBox#ChipSpin::down-button {
+  width: 13px; border: none; background: transparent;
+}
+QLabel#ChipNo { color: #8fb4ff; font-weight: 600; }
+QLabel#ChipName { color: #e3e6ea; }
+QPushButton#ChipX {
+  background: transparent; border: none; color: #7c828d; font-size: 14px;
+  padding: 0px;
+}
+QPushButton#ChipX:hover { color: #ff8a8a; }
 
 QProgressBar {
   background: #33363c; border: none; border-radius: 6px; height: 12px; text-align: center;
@@ -407,8 +590,8 @@ QPlainTextEdit {
   color: #b9bec7; padding: 8px;
 }
 
-QLabel#State { color: #9aa1ad; font-size: 12.5px; padding: 2px; }
-QLabel#Hint { font-size: 11.5px; }
+QLabel#State { color: #9aa1ad; font-size: 14.5px; padding: 2px; }
+QLabel#Hint { font-size: 13.5px; }
 
 QDialog { background: #1b1c1f; }
 QDialog QLabel { color: #d7dae0; }
@@ -416,7 +599,7 @@ QDialog QLabel { color: #d7dae0; }
 QFrame#SuppressBox {
   background: #262a31; border: 1px solid #3a414d; border-radius: 8px;
 }
-QCheckBox#SuppressCk { color: #eef1f5; font-size: 13px; spacing: 10px; padding: 2px; }
+QCheckBox#SuppressCk { color: #eef1f5; font-size: 15px; spacing: 10px; padding: 2px; }
 QCheckBox#SuppressCk::indicator {
   width: 20px; height: 20px; border: 2px solid #6b7688;
   border-radius: 5px; background: #1b1c1f;
@@ -428,7 +611,7 @@ QCheckBox#SuppressCk::indicator:checked {
 }
 QTextBrowser {
   background: #16171a; border: 1px solid #2c2f35; border-radius: 8px;
-  color: #d7dae0; padding: 14px; font-size: 15px;
+  color: #d7dae0; padding: 14px; font-size: 17px;
 }
 QTabWidget::pane { border: 1px solid #2c2f35; border-radius: 8px; top: -1px; }
 QTabBar::tab {
@@ -441,6 +624,9 @@ QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical { background: #3a3e46; border-radius: 5px; min-height: 30px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 """
+
+# 图标路径要用绝对路径：打包后程序所在目录会变
+QSS = QSS.replace("@ASSETS@", str(ASSETS).replace("\\", "/"))
 
 
 def dir_size_mb(path) -> float:
@@ -568,12 +754,12 @@ class DarkMsg(QDialog):
         v.setSpacing(14)
 
         head = QLabel(title)
-        head.setStyleSheet("color:#f0f2f5; font-size:15px; font-weight:600;")
+        head.setStyleSheet("color:#f0f2f5; font-size:17px; font-weight:600;")
         v.addWidget(head)
 
         body = QLabel(text)
         body.setWordWrap(True)
-        body.setStyleSheet("color:#b9bec7; font-size:12.5px; line-height:150%;")
+        body.setStyleSheet("color:#b9bec7; font-size:14.5px; line-height:150%;")
         v.addWidget(body)
 
         row = QHBoxLayout()
@@ -628,13 +814,13 @@ class HelpOverlay(QWidget):
         pv.setSpacing(10)
 
         head = QLabel("欢迎使用 · 使用说明" if first_run else "使用说明")
-        head.setStyleSheet("color:#f0f2f5; font-size:16px; font-weight:600;")
+        head.setStyleSheet("color:#f0f2f5; font-size:18px; font-weight:600;")
         pv.addWidget(head)
 
         if first_run:
             tip = QLabel("第一次使用，先看一遍：① 启动游戏并登录　② 刷新关卡 → 开始刷本")
             tip.setWordWrap(True)
-            tip.setStyleSheet("color:#9fc0ff; font-size:12.5px;")
+            tip.setStyleSheet("color:#9fc0ff; font-size:14.5px;")
             pv.addWidget(tip)
 
         tabs = QTabWidget()
@@ -723,6 +909,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("就绪")
         self.nav_buttons[0].setChecked(True)
         self._ready = False          # 初始化期间不触发"回主界面"
+        self._filling = False        # 填关卡勾选列表时不要把信号当成用户操作
         self._on_type_changed()
         self._ready = True
 
@@ -963,7 +1150,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(14)
 
         head = QLabel("刷本")
-        head.setStyleSheet("color:#f0f2f5; font-size:18px; font-weight:600;")
+        head.setStyleSheet("color:#f0f2f5; font-size:20px; font-weight:600;")
         v.addWidget(head)
 
         # 运行模式（可展开/收起，完成后并入其中）
@@ -990,6 +1177,18 @@ class MainWindow(QMainWindow):
         row2.addStretch(1)
         self.acc_mode.add_layout(row2)
 
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("间隔(秒)"))
+        self.sp_interval = QDoubleSpinBox()
+        self.sp_interval.setRange(0, 120)
+        self.sp_interval.setSingleStep(0.5)
+        self.sp_interval.setDecimals(1)
+        self.sp_interval.setFixedWidth(96)
+        self.sp_interval.setValue(float(self.cfg.get("interval", 2.0)))
+        row3.addWidget(self.sp_interval)
+        row3.addStretch(1)
+        self.acc_mode.add_layout(row3)
+
         self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
         self.cb_after.currentIndexChanged.connect(lambda _i: self._refresh_mode_title())
         self._refresh_mode_title()
@@ -997,45 +1196,91 @@ class MainWindow(QMainWindow):
 
         # 任务设置
         c3 = Card("gamepad-2", "任务设置")
+        c3.layout().setStretch(1, 0)      # 标题列不再吃掉宽度
+        c3.layout().insertSpacing(2, 40)  # 控件块离标题的间距（想让整块往右就调大）
+        c3.layout().addStretch(1)         # 剩下的空白留到右边，控件整块靠左
         col = QVBoxLayout(); col.setSpacing(8)
 
         row0 = QHBoxLayout()
         self.cb_type = QComboBox()
-        self.cb_type.addItem("净化巡历", "junreki")
-        self.cb_type.addItem("曜日任務", "weekday")
-        self.cb_type.setMinimumWidth(150)
-        self.cb_type.setCurrentIndex(
-            0 if self.cfg.get("stage_type", "junreki") == "junreki" else 1)
+        for _name, _key, _node in ENTRIES:
+            self.cb_type.addItem(_name, _key)
+        self.cb_type.setMinimumWidth(120)
+        _idx = self.cb_type.findData(self.cfg.get("entry", "junreki"))
+        self.cb_type.setCurrentIndex(_idx if _idx >= 0 else 0)
         self.cb_type.currentIndexChanged.connect(self._on_type_changed)
-        row0.addWidget(QLabel("副本类型")); row0.addWidget(self.cb_type)
+        row0.addWidget(QLabel("副本")); row0.addWidget(self.cb_type)
         row0.addStretch(1)
         col.addLayout(row0)
 
+        # 话：只有分话的副本才有这一层
+        rowc = QHBoxLayout()
+        self.lbl_chapter = QLabel("话")
+        self.cb_chapter = QComboBox()
+        self.cb_chapter.setMinimumWidth(220)
+        self.cb_chapter.setMaximumWidth(420)
+        self.cb_chapter.currentIndexChanged.connect(self._on_chapter_changed)
+        self.btn_read_chapters = QPushButton("读取话列表")
+        self.btn_read_chapters.setObjectName("Ghost")
+        self.btn_read_chapters.clicked.connect(self.read_chapters_list)
+        rowc.addWidget(self.lbl_chapter)
+        rowc.addWidget(self.cb_chapter, 1)
+        rowc.addWidget(self.btn_read_chapters)
+        col.addLayout(rowc)
+
+        # 关卡：可勾多关，按列表顺序轮着刷
         row1 = QHBoxLayout()
-        self.cb_stage = QComboBox()
-        self.cb_stage.setMinimumWidth(340)
-        row1.addWidget(QLabel("目标关卡")); row1.addWidget(self.cb_stage, 1)
-        self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.setObjectName("Ghost")
-        self.btn_refresh.setFixedWidth(72)
-        self.btn_refresh.clicked.connect(self.refresh_stages)
-        row1.addWidget(self.btn_refresh)
+        self.lst_stages = CheckList()
+        self.lst_stages.setMinimumWidth(420)
+        self.lst_stages.setMaximumWidth(600)
+        self.lst_stages.setMinimumHeight(84)
+        self.lst_stages.setMaximumHeight(132)
+        self.lst_stages.itemChanged.connect(self._on_stage_item_changed)
+        self.btn_read_stages = QPushButton("读取关卡")
+        self.btn_read_stages.setObjectName("Ghost")
+        self.btn_read_stages.clicked.connect(self.read_stages_list)
+        self.lbl_stage_tag = QLabel("关卡")
+        row1.addWidget(self.lbl_stage_tag)
+        row1.addWidget(self.lst_stages)
+        row1.insertSpacing(2, 100)   # 列表窄了 100px，这里补回来，右边「读取关卡」位置不变
+        row1.addWidget(self.btn_read_stages)
         col.addLayout(row1)
 
-        row2 = QHBoxLayout()
-        self.sp_runs = QSpinBox(); self.sp_runs.setRange(0, 9999)
-        self.sp_runs.setFixedWidth(88)
-        self.sp_runs.setValue(int(self.cfg.get("runs", 5)))
-        self.sp_runs.setSpecialValueText("无限")
-        self.sp_interval = QDoubleSpinBox(); self.sp_interval.setRange(0, 120)
-        self.sp_interval.setSingleStep(0.5)
-        self.sp_interval.setFixedWidth(96)
-        self.sp_interval.setValue(float(self.cfg.get("interval", 2.0)))
-        row2.addWidget(QLabel("刷本次数")); row2.addWidget(self.sp_runs)
-        row2.addSpacing(16)
-        row2.addWidget(QLabel("间隔(秒)")); row2.addWidget(self.sp_interval)
-        row2.addStretch(1)
-        col.addLayout(row2)
+        # 刷本计划：勾了的关卡排成一行小方块（序号 / 关卡名 / 次数 / 取消）
+        rowplan = QHBoxLayout()
+        self._plan_pad = QWidget()
+        self._plan_pad.setFixedWidth(0)
+        rowplan.addWidget(self._plan_pad)
+        self.plan_scroll = QScrollArea()
+        self.plan_scroll.setWidgetResizable(True)
+        self.plan_scroll.setFrameShape(QFrame.NoFrame)
+        # 只留竖向滚动条：横向的会盖住右列的字
+        self.plan_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.plan_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.plan_scroll.setFixedHeight(90)     # 两行半：28 × 2 + 间距 6，再露出半行，一眼能看出下面还有
+        self.plan_scroll.setMaximumWidth(560)
+        self.chip_box = QWidget()
+        self.chip_lay = QGridLayout(self.chip_box)
+        self.chip_lay.setContentsMargins(0, 0, 12, 0)   # 右边留出滚动条的位置
+        self.chip_lay.setHorizontalSpacing(6)
+        self.chip_lay.setVerticalSpacing(6)
+        self.plan_scroll.setWidget(self.chip_box)
+        self._chips = []
+        self._drag_pos = None          # 拖动中指针的全局坐标（自动滚动用）
+        self._drag_src = None          # 正在拖第几个
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(30)
+        self._auto_timer.timeout.connect(self._autoscroll_tick)
+        rowplan.addWidget(self.plan_scroll)
+        rowplan.addStretch(1)
+        col.addLayout(rowplan)
+
+        rowp = QHBoxLayout()
+        self.lbl_pick = QLabel("")
+        self.lbl_pick.setStyleSheet("color:#7c828d; font-size:13.5px;")
+        rowp.addWidget(self.lbl_pick, 1)
+        col.addLayout(rowp)
+
         c3.right.addLayout(col)
         v.addWidget(c3)
 
@@ -1080,7 +1325,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(14)
 
         head = QLabel("设置")
-        head.setStyleSheet("color:#f0f2f5; font-size:18px; font-weight:600;")
+        head.setStyleSheet("color:#f0f2f5; font-size:20px; font-weight:600;")
         v.addWidget(head)
 
         c1 = Card("monitor", "窗口大小")
@@ -1119,6 +1364,20 @@ class MainWindow(QMainWindow):
         c4.add_right(self.cb_gpu)
         v.addWidget(c4)
 
+        corder = Card("list", "刷本顺序")
+        self.cb_order = QComboBox()
+        self.cb_order.addItem("按勾选先后", "picked")
+        self.cb_order.addItem("按列表顺序", "list")
+        self.cb_order.setMinimumWidth(180)
+        self.cb_order.setCurrentIndex(
+            max(0, self.cb_order.findData(self.cfg.get("stage_order", "picked"))))
+        self.cb_order.setToolTip(
+            "按勾选先后：计划表里可以用 ▲▼ 调顺序\n"
+            "按列表顺序：顺序固定跟游戏里的关卡排列，▲▼ 变灰")
+        self.cb_order.currentIndexChanged.connect(self._on_order_changed)
+        corder.add_right(self.cb_order)
+        v.addWidget(corder)
+
         # 清理浏览器缓存（AI 模型、语言包、崩溃日志等占空间的东西）
         self.card_clean = Card("power", "清理浏览器缓存")
         self.lbl_cache = QLabel("")
@@ -1147,7 +1406,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(12)
 
         head = QLabel("日志")
-        head.setStyleSheet("color:#f0f2f5; font-size:18px; font-weight:600;")
+        head.setStyleSheet("color:#f0f2f5; font-size:20px; font-weight:600;")
         v.addWidget(head)
 
         self.txt_log = QPlainTextEdit()
@@ -1201,101 +1460,372 @@ class MainWindow(QMainWindow):
             f"运行模式 · {self.cb_mode.currentText()} · {self.cb_after.currentText()}")
 
     def _on_type_changed(self, *_):
-        """切换副本类型：净化巡历用内置全关卡；曜日任務用当天读到的列表"""
-        is_weekday = self.cb_type.currentData() == "weekday"
-        # 刷新只给曜日任務用（净化巡历已内置全部关卡）
-        self.btn_refresh.setVisible(is_weekday)
-        if is_weekday:
-            self._fill_weekday_stages()
-        else:
-            self._fill_junreki_stages()
-        self._ensure_home_after_switch("副本类型")
+        """切换副本入口：分话的显示「话」这一行，曜日任務直接读关卡"""
+        self._show_chapter_row()
+        self._fill_chapters()
+        self._fill_stages()
+        self.cfg["entry"] = self._entry_key()
+        config.save(self.cfg)
+        self._ensure_home_after_switch("副本")
 
-    def _fill_weekday_stages(self):
-        """用配置里缓存的当日关卡填下拉框"""
-        self.cb_stage.clear()
-        stages = self.cfg.get("weekday_stages") or []
-        fresh = (self.cfg.get("weekday_day") == game_day())
-        saved_title = self.cfg.get("stage_title_weekday", "")
-        if stages and fresh:
-            for s in stages:
-                title = s.get("title", "")
-                sub = s.get("sub", "")
-                cidx = s.get("idx")
-                text = f"{title}　{sub}" if sub else title
-                self.cb_stage.addItem(text, (title, sub, cidx))
-            for i in range(self.cb_stage.count()):
-                if (self.cb_stage.itemData(i) or ("", ""))[0] == saved_title:
-                    self.cb_stage.setCurrentIndex(i)
-                    break
-        else:
-            hint = "（今天还没刷新，点「刷新」读取）" if not stages else "（已过期，点「刷新」读取今日关卡）"
-            self.cb_stage.addItem(hint, ("", ""))
+    def _show_chapter_row(self):
+        need = self._entry_key() in CHAPTERED
+        for w in (self.lbl_chapter, self.cb_chapter, self.btn_read_chapters):
+            w.setVisible(need)
+        self.btn_read_stages.setText("读取关卡" if need else "读取曜日关卡")
 
-    def _fill_junreki_stages(self):
-        """净化巡历：内置「はじまりの旅」一页的全部关卡"""
-        self.cb_stage.blockSignals(True)
-        self.cb_stage.clear()
-        for name, t, _k, sub, cidx in STAGES:
-            self.cb_stage.addItem(name, (t, sub, cidx))
-        saved = self.cfg.get("stage_title", "")
-        for i in range(self.cb_stage.count()):
-            if (self.cb_stage.itemData(i) or ("", ""))[0] == saved:
-                self.cb_stage.setCurrentIndex(i)
-                break
-        self.cb_stage.blockSignals(False)
-
-    def refresh_stages(self):
-        """读取当前副本类型的关卡列表（需要已连接的游戏窗口）"""
-        if not cdp_alive():
-            DarkMsg.info(
-                self, "需要先打开游戏",
-                "读取关卡列表需要连上游戏：\n"
-                "先到【启动游戏】点「启动」，等画面出来后回来点「刷新」。")
+    def _fill_chapters(self):
+        """用缓存的话列表填下拉框（不用内置、不联网）"""
+        self.cb_chapter.blockSignals(True)
+        self.cb_chapter.clear()
+        entry = self._entry_key()
+        saved = config.get_entry(self.cfg, entry).get("chapter") or {}
+        if entry not in CHAPTERED:
+            self.cb_chapter.blockSignals(False)
             return
-        kind = "weekday" if self.cb_type.currentData() == "weekday" else "junreki"
-        from worker import ListWorker
-        self.btn_refresh.setEnabled(False)
-        self.btn_refresh.setText("读取中")
-        self.append_log(">>> 正在读取%s关卡…" % ("曜日任務" if kind == "weekday" else "净化巡历"))
+        chapters = config.get_entry(self.cfg, entry).get("chapters") or []
+        if not chapters:
+            self.cb_chapter.addItem("（还没读过，点「读取话列表」）", {})
+        else:
+            for c in chapters:
+                text = "%s　%s" % (c.get("title", ""), c.get("sub", "")) if c.get("sub") \
+                    else c.get("title", "")
+                self.cb_chapter.addItem(text, c)
+            want = config.ckey(saved)
+            for i in range(self.cb_chapter.count()):
+                if config.ckey(self.cb_chapter.itemData(i) or {}) == want:
+                    self.cb_chapter.setCurrentIndex(i)
+                    break
+        self.cb_chapter.blockSignals(False)
 
-        self.lw = ListWorker(self.cfg, kind, self)
+    def _fill_stages(self):
+        """用缓存的关卡列表填勾选列表，勾上之前选过的那些"""
+        self._filling = True
+        try:
+            entry = self._entry_key()
+            self.lst_stages.clear()
+            stages = config.entry_stages(self.cfg, entry)
+            picked = [config.ckey({"title": s.get("title"), "sub": s.get("sub")})
+                      for s in config.entry_selected(self.cfg, entry)]
+            if not stages:
+                tip = "（还没读过，点「读取关卡」）" if entry in CHAPTERED else \
+                    "（还没读过，点「读取曜日关卡」）"
+                it = QListWidgetItem(tip)
+                it.setFlags(Qt.NoItemFlags)
+                it.setForeground(QColor("#7c828d"))
+                self.lst_stages.addItem(it)
+            else:
+                for s in stages:
+                    text = "%s　%s" % (s.get("title", ""), s.get("sub", "")) if s.get("sub") \
+                        else s.get("title", "")
+                    it = QListWidgetItem(text)
+                    it.setData(Qt.UserRole, s)
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                    key = config.ckey({"title": s.get("title"), "sub": s.get("sub")})
+                    it.setCheckState(Qt.Checked if key in picked else Qt.Unchecked)
+                    self.lst_stages.addItem(it)
+            self._fill_plan()
+        finally:
+            self._filling = False
+
+    # ---------------- 刷本计划 ----------------
+    def _order_mode(self) -> str:
+        return str(self.cfg.get("stage_order", "picked"))
+
+    def _ordered_selected(self, entry=None) -> list:
+        """当前勾了的关卡，带次数，按「勾选先后」或「列表顺序」排好"""
+        entry = entry or self._entry_key()
+        sel = []
+        for s in config.entry_selected(self.cfg, entry):
+            if not isinstance(s, dict):
+                continue
+            sel.append({"title": s.get("title", ""), "sub": s.get("sub", ""),
+                        "times": max(1, int(s.get("times", 1) or 1))})
+        if self._order_mode() == "list":
+            pos = {config.ckey(s): i
+                   for i, s in enumerate(config.entry_stages(self.cfg, entry))}
+            sel.sort(key=lambda s: pos.get(config.ckey(s), 999))
+        return sel
+
+    def _save_selected(self, sel: list):
+        config.set_entry_selected(self.cfg, self._entry_key(), list(sel))
+        config.save(self.cfg)
+
+    def _plan_text(self, sel) -> str:
+        if not sel:
+            return "还没勾关卡（点关卡就能勾上，可以勾多关）"
+        total = sum(s["times"] for s in sel)
+        if len(sel) == 1:
+            return "1 关 · %d 场（%s ×%d）" % (total, sel[0]["title"], sel[0]["times"])
+        tail = "（顺序跟列表）" if self._order_mode() == "list" else ""
+        return "%d 关 · 共 %d 场%s" % (len(sel), total, tail)
+
+    def _fill_plan(self):
+        """把已选关卡画成一行方块"""
+        self._plan_fill = True
+        try:
+            sel = self._ordered_selected()
+            while self.chip_lay.count():
+                it = self.chip_lay.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.setParent(None)
+                    w.deleteLater()
+            self._chips = []
+            locked = self._order_mode() == "list"
+            for i, s in enumerate(sel):
+                chip = PlanChip(i, s, s.get("times", 1), draggable=not locked)
+                chip.moved.connect(self._chip_moved)
+                chip.dragging.connect(self._chip_dragging)
+                chip.removed.connect(self._chip_removed)
+                chip.timesChanged.connect(self._set_times)
+                self.chip_lay.addWidget(chip, i // 2, i % 2)   # 两列，往下排
+                self._chips.append(chip)
+            has = bool(sel)
+            self.plan_scroll.setVisible(has)
+            self._plan_pad.setVisible(has)
+            # 左边空出「关卡」标签那么宽，跟上面的列表对齐
+            self._plan_pad.setFixedWidth(self.lbl_stage_tag.sizeHint().width())
+            self.plan_scroll.setToolTip(
+                "顺序跟关卡列表走，去【设置】里切回「按勾选先后」才能拖"
+                if locked else "按住方块拖到另一关上，两关直接对调序号，✕ 取消这一关")
+            self.lbl_pick.setText(self._plan_text(sel))
+        finally:
+            self._plan_fill = False
+
+    def _set_times(self, key, value):
+        """次数改了：只存和更新汇总，不重建表（重建会把正在用的输入框干掉）"""
+        if getattr(self, "_plan_fill", False):
+            return
+        sel = self._ordered_selected()
+        for s in sel:
+            if config.ckey(s) == key:
+                s["times"] = max(1, int(value))
+        self._save_selected(sel)
+        self.lbl_pick.setText(self._plan_text(sel))
+
+    def _target_index(self, global_pos):
+        """指针离哪个方块最近，就是跟哪个换位置"""
+        p = self.chip_box.mapFromGlobal(global_pos)
+        best, best_d = None, None
+        for i, ch in enumerate(self._chips):
+            c = ch.geometry().center()
+            d = (c.x() - p.x()) ** 2 + (c.y() - p.y()) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = i, d
+        return best
+
+    def _clear_hint(self):
+        for ch in self._chips:
+            ch.set_hint(False)
+
+    def _hint_only(self, src, tgt):
+        """只把 tgt 那个方块点亮"""
+        for i, ch in enumerate(self._chips):
+            ch.set_hint(tgt is not None and i == tgt and i != src)
+
+    def _chip_dragging(self, src: int, global_pos):
+        """拖的过程中高亮「松手会跟它换位」的那个方块"""
+        if self._order_mode() != "picked":
+            return
+        self._drag_pos = global_pos
+        self._drag_src = src
+        self._hint_only(src, self._target_index(global_pos))
+        if not self._auto_timer.isActive():
+            self._auto_timer.start()
+
+    def _autoscroll_tick(self):
+        """拖到计划区上下边缘就自己滚，指针停着也滚（否则一排 8 关根本拖不下去）"""
+        if self._drag_pos is None or self._order_mode() != "picked":
+            self._auto_timer.stop()
+            return
+        vp = self.plan_scroll.viewport()
+        p = vp.mapFromGlobal(self._drag_pos)
+        edge = 18
+        step = 0
+        if p.y() < edge:
+            step = -max(2, int((edge - p.y()) / edge * 14))
+        elif p.y() > vp.height() - edge:
+            step = max(2, int((p.y() - (vp.height() - edge)) / edge * 14))
+        if not step:
+            return
+        bar = self.plan_scroll.verticalScrollBar()
+        bar.setValue(bar.value() + step)
+        # 滚完可选区变了，高亮跟着更新（方块在 chip_box 里，坐标已跟着滚动变）
+        self._hint_only(self._drag_src, self._target_index(self._drag_pos))
+
+    def _chip_moved(self, src: int, global_pos):
+        """方块松手：跟落点上那个方块互换序号（3 拖到 1 上，1 变 3、3 变 1）"""
+        self._clear_hint()
+        self._auto_timer.stop()
+        self._drag_pos = None
+        self._drag_src = None
+        if self._order_mode() != "picked":
+            return
+        tgt = self._target_index(global_pos)
+        if tgt is None or tgt == src:
+            return
+        sel = self._ordered_selected()
+        if not (0 <= src < len(sel) and 0 <= tgt < len(sel)):
+            return
+        sel[src], sel[tgt] = sel[tgt], sel[src]
+        self._save_selected(sel)
+        self._fill_plan()
+
+    def _chip_removed(self, index: int):
+        """点 ✕：取消这一关（列表里的勾也一起去掉）"""
+        sel = self._ordered_selected()
+        if not (0 <= index < len(sel)):
+            return
+        key = config.ckey(sel[index])
+        sel.pop(index)
+        self._save_selected(sel)
+        self._filling = True
+        try:
+            for i in range(self.lst_stages.count()):
+                it = self.lst_stages.item(i)
+                d = it.data(Qt.UserRole)
+                if isinstance(d, dict) and config.ckey(d) == key:
+                    it.setCheckState(Qt.Unchecked)
+                    break
+        finally:
+            self._filling = False
+        self._fill_plan()
+
+    def _on_order_changed(self, *_):
+        self.cfg["stage_order"] = self.cb_order.currentData() or "picked"
+        config.save(self.cfg)
+        self._fill_plan()
+
+    def _on_chapter_changed(self, *_):
+        if getattr(self, "_filling", False):
+            return
+        entry = self._entry_key()
+        chapter = self.cb_chapter.currentData() or {}
+        if not isinstance(chapter, dict):
+            chapter = {}
+        config.get_entry(self.cfg, entry)["chapter"] = dict(chapter)
+        config.save(self.cfg)
+        self._fill_stages()
+
+    def _on_stage_item_changed(self, item):
+        """勾上就追加到计划末尾，取消就摘掉；已有次数保留"""
+        if getattr(self, "_filling", False):
+            return
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            return
+        key = config.ckey(data)
+        sel = self._ordered_selected()
+        if item.checkState() == Qt.Checked:
+            if all(config.ckey(s) != key for s in sel):
+                sel.append({"title": data.get("title", ""),
+                            "sub": data.get("sub", ""), "times": 1})
+        else:
+            sel = [s for s in sel if config.ckey(s) != key]
+        self._save_selected(sel)
+        self._fill_plan()
+
+    # ---- 读取 ----
+    def _need_game(self, what: str) -> bool:
+        if cdp_alive():
+            return True
+        DarkMsg.info(
+            self, "需要先打开游戏",
+            f"读取{what}要连上游戏：\n"
+            "先到【启动游戏】点「启动」，等画面出来后回来点读取。")
+        return False
+
+    def _busy(self) -> bool:
+        lw = getattr(self, "lw", None)
+        return bool(lw and lw.isRunning())
+
+    def read_chapters_list(self):
+        entry = self._entry_key()
+        if entry not in CHAPTERED:
+            return
+        if not self._need_game("话列表") or self._busy():
+            return
+        from worker import ListWorker
+        self.btn_read_chapters.setEnabled(False)
+        self.btn_read_chapters.setText("读取中")
+        self.append_log(">>> 正在读取「%s」的话列表…" % self.cb_type.currentText())
+        self.lw = ListWorker(self.cfg, "chapters", entry=entry, parent=self)
         self.lw.sig_done.connect(self._on_list_done)
         self.lw.start()
 
+    def read_stages_list(self):
+        entry = self._entry_key()
+        if not self._need_game("关卡列表") or self._busy():
+            return
+        from worker import ListWorker
+        chapter = {} if entry not in CHAPTERED else (self.cb_chapter.currentData() or {})
+        if entry in CHAPTERED and not chapter.get("title"):
+            DarkMsg.info(self, "先选话", "先点「读取话列表」，然后选一话再读关卡。")
+            return
+        self.btn_read_stages.setEnabled(False)
+        self.btn_read_stages.setText("读取中")
+        what = "曜日任務" if entry == "weekday" else "「%s / %s」" % (
+            self.cb_type.currentText(), chapter.get("title", ""))
+        self.append_log(f">>> 正在读取{what}的关卡…")
+        kind = "weekday" if entry == "weekday" else "stages"
+        self.lw = ListWorker(self.cfg, kind, entry=entry, chapter=chapter, parent=self)
+        self.lw.sig_done.connect(self._on_list_done)
+        self.lw.start()
+
+    def refresh_stages(self):
+        """兼容旧按钮/提醒逻辑：按当前入口读该读的那一层"""
+        entry = self._entry_key()
+        if entry in CHAPTERED:
+            self.read_stages_list()
+        else:
+            self.read_stages_list()
+
     def _on_list_done(self, cards, err):
-        self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("刷新")
+        self.btn_read_chapters.setEnabled(True)
+        self.btn_read_chapters.setText("读取话列表")
+        self.btn_read_stages.setEnabled(True)
+        self.btn_read_stages.setText("读取关卡" if self._entry_key() in CHAPTERED
+                                     else "读取曜日关卡")
         if err:
             self.append_log(f"!!! 读取失败：{err}")
             DarkMsg.warn(self, "读取失败", err)
             return
 
-        kind = getattr(self.lw, "kind", "weekday")
-        data = [{"title": c["title"], "sub": c.get("sub", ""),
+        lw = getattr(self, "lw", None)
+        kind = getattr(lw, "kind", "stages")
+        entry = getattr(lw, "entry", self._entry_key())
+        e = config.get_entry(self.cfg, entry)
+        data = [{"title": c.get("title", ""), "sub": c.get("sub", ""),
                  "idx": c.get("idx", i)} for i, c in enumerate(cards)]
-        if kind == "weekday":
-            self.cfg["weekday_stages"] = data
-            self.cfg["weekday_day"] = game_day()
-        else:
-            # 净化巡历永久保存，不设过期
-            self.cfg["junreki_stages"] = data
-        config.save(self.cfg)
 
-        self.cb_stage.clear()
-        for i, c in enumerate(cards):
-            title = c.get("title", "")
-            sub = c.get("sub", "")
-            text = f"{title}　{sub}" if sub else title
-            self.cb_stage.addItem(text, (title, sub, c.get("idx", i)))
-        saved = (self.cfg.get("stage_title_weekday", "") if kind == "weekday"
-                 else self.cfg.get("stage_title", ""))
-        for i in range(self.cb_stage.count()):
-            if (self.cb_stage.itemData(i) or ("", ""))[0] == saved:
-                self.cb_stage.setCurrentIndex(i)
-                break
-        extra = f"（{game_day()} 有效）" if kind == "weekday" else "（已永久保存）"
-        self.append_log(f">>> 读取到 {len(cards)} 个关卡{extra}")
+        if kind == "chapters":
+            e["chapters"] = data
+            # 之前选的话还在就保留；否则默认最后一话（列表是新的在上，最后一话是最早解锁的，
+            # 通常才是有战场可打的那一话，最新一话常常还在剧情没推过去）
+            old = config.ckey(e.get("chapter") or {})
+            keep = next((c for c in data if config.ckey(c) == old), None)
+            e["chapter"] = dict(keep or (data[-1] if data else {}))
+            config.save(self.cfg)
+            self._fill_chapters()
+            self._fill_stages()
+            self.append_log(f">>> 读到 {len(data)} 话")
+            return
+
+        if entry == "weekday":
+            e["stages"] = data
+            e["day"] = game_day()
+        else:
+            e.setdefault("stage_lists", {})[config.ckey(e.get("chapter"))] = data
+            # 重读后把已勾的关卡过滤一遍（关卡可能变了）
+            old = e.get("selected", {}).get(config.ckey(e.get("chapter"))) or []
+            keys = {config.ckey(s) for s in data}
+            e["selected"][config.ckey(e.get("chapter"))] = [
+                s for s in old if config.ckey(s) in keys]
+        config.save(self.cfg)
+        self._fill_stages()
+        extra = f"（{e.get('day')} 有效）" if entry == "weekday" else ""
+        self.append_log(f">>> 读到 {len(data)} 个关卡{extra}")
 
     def _on_mode_changed(self, *_):
         self._refresh_mode_title()
@@ -1326,7 +1856,7 @@ class MainWindow(QMainWindow):
         不再自动静默读取，改成弹窗问用户。
         """
         today = game_day()
-        if self.cfg.get("weekday_day") == today:
+        if config.get_entry(self.cfg, "weekday").get("day") == today:
             return                      # 今天已经读过了
         if self.cfg.get("weekday_remind_day") == today:
             return                      # 今天已经提醒过了
@@ -1361,21 +1891,9 @@ class MainWindow(QMainWindow):
         self.append_log(">>> 按提醒刷新曜日任務…")
         self.refresh_stages()
 
-    def _current_stage(self, is_weekday=None):
-        if is_weekday is None:
-            is_weekday = self.cb_type.currentData() == "weekday"
-        data = self.cb_stage.currentData()
-        if isinstance(data, (tuple, list)) and len(data) >= 2:
-            title, sub = data[0], data[1]
-            cidx = data[2] if len(data) > 2 else None
-        else:
-            title, sub, cidx = (data or ""), "", None
-        if is_weekday:
-            return self.cb_stage.currentText(), title, [], sub, cidx
-        # 净化巡历：关键词从标题里拆（例如 武蔵国　江戸　火事 -> 江戸, 火事）
-        parts = [p for p in str(title).replace("\u3000", " ").split(" ") if p]
-        keywords = parts[1:] if len(parts) > 1 else parts
-        return self.cb_stage.currentText(), title, keywords, sub, cidx
+    def _entry_key(self) -> str:
+        return self.cb_type.currentData() or "junreki"
+
 
     def _preset(self):
         key = self.cb_win_launch.currentData()
@@ -1428,10 +1946,10 @@ class MainWindow(QMainWindow):
         self._conn_state = ok
         if ok:
             self.lbl_conn.setText("● 已连接")
-            self.lbl_conn.setStyleSheet("color:#5fbf7f; font-size:11.5px;")
+            self.lbl_conn.setStyleSheet("color:#5fbf7f; font-size:13.5px;")
         else:
             self.lbl_conn.setText("○ 未检测到")
-            self.lbl_conn.setStyleSheet("color:#7c828d; font-size:11.5px;")
+            self.lbl_conn.setStyleSheet("color:#7c828d; font-size:13.5px;")
 
     def append_log(self, text: str):
         self.txt_log.appendPlainText(text)
@@ -1444,21 +1962,28 @@ class MainWindow(QMainWindow):
 
     def _collect_cfg(self):
         key, w_, h_, maximized = self._preset()
-        is_weekday = self.cb_type.currentData() == "weekday"
-        name, title, kw, sub, cidx = self._current_stage(is_weekday)
+        entry = self._entry_key()
+        chapter = {} if entry not in CHAPTERED else dict(self.cb_chapter.currentData() or {})
+        picked = self._ordered_selected()
         self.cfg.update({
-            "stage_type": "weekday" if is_weekday else "junreki",
-            "stage_title": title, "stage_keywords": kw, "stage_sub": sub,
-            "stage_idx": cidx,
-            "runs": self.sp_runs.value(), "interval": self.sp_interval.value(),
+            "entry": entry,
+            "chapter": chapter,
+            "stages": picked,
+            "runs": (sum(int(s.get("times", 1) or 1) for s in picked)
+                     if picked else 1),
+            "interval": self.sp_interval.value(),
             "mode": self.cb_mode.currentData(), "after": self.cb_after.currentData(),
             "window_mode": key, "width": w_, "height": h_, "maximized": maximized,
             "headless": self.sw_headless.isChecked(),
             "sound": self.sw_sound.isChecked(),
             "gpu_mode": self.cb_gpu.currentData(),
         })
-        if is_weekday:
-            self.cfg["stage_title_weekday"] = title
+        e = config.get_entry(self.cfg, entry)
+        e["chapter"] = dict(chapter)
+        config.set_entry_selected(self.cfg, entry, picked)
+        name = picked[0].get("title", "") if picked else ""
+        if len(picked) > 1:
+            name = "%s 等 %d 关" % (name, len(picked))
         return name
 
     def _gpu_mode(self) -> str:
@@ -1566,6 +2091,12 @@ class MainWindow(QMainWindow):
 
         name = self._collect_cfg()
         config.save(self.cfg)
+        if not self.cfg.get("stages"):
+            DarkMsg.info(
+                self, "还没选关卡",
+                "先在【刷本】页选好副本和话，点「读取关卡」，"
+                "再把要刷的关卡勾上（可以勾多关，按列表顺序轮着刷）。")
+            return
 
         target = self.cfg["runs"] or 1
         self.progress.setMaximum(max(target, 1))

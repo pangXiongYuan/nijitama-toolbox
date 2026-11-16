@@ -9,32 +9,36 @@ farmcore.py —— 与界面无关的刷本流程（供 GUI 和 CLI 共用）
 import time
 
 
-def ensure_battle_list(g, log, stage_type="junreki", stop_check=None) -> bool:
+def ensure_battle_list(g, log, entry="junreki", chapter=None, stop_check=None) -> bool:
     """确保处在「关卡列表」上（stop_check 为真时直接放弃）"""
     if stop_check is not None and stop_check():
         return False
     if not g.ui_active("StageSelect"):
         return False
 
-    if stage_type == "weekday":
+    if entry == "weekday":
         if not g.open_weekday(stop_check=stop_check):
             return False
         return len(g.weekday_cards()) > 0
 
-    st = g.js("__gt.stageState()") or {}
-    cards = g.js("__gt.cards()") or []
-    if st.get("type") == 2 and len(cards) > 0:
-        return True
-    return g.to_battle_list(stop_check=stop_check)
+    title = (chapter or {}).get("title", "")
+    sub = (chapter or {}).get("sub", "")
+    return g.to_battle_list(entry=entry, chapter_title=title, chapter_sub=sub,
+                            stop_check=stop_check)
 
 
-def run_once(g, idx: int, stage_title, stage_keywords, log,
-             stop_check=None, stage_type="junreki", stage_sub="",
-             stage_idx=None, pause_check=None) -> str:
+def run_once(g, idx: int, stage, log, stop_check=None, entry="junreki",
+             pause_check=None) -> str:
     """
-    跑一次副本。
+    跑一次副本。stage = {"title": ..., "sub": ..., "idx": ...}
     返回 'ok' / 'failed' / 'shortage' / 'retry' / 'stopped' / 'paused'
+         / 'no_cards'（列表里没有可打的关卡）/ 'click_dead'（有卡片但点了进不去）
     """
+    stage = stage or {}
+    stage_title = str(stage.get("title", ""))
+    stage_sub = str(stage.get("sub", ""))
+    stage_idx = stage.get("idx")
+
     def stopped():
         return stop_check is not None and stop_check()
 
@@ -46,30 +50,27 @@ def run_once(g, idx: int, stage_title, stage_keywords, log,
         return "paused"
 
     # 1) 进入关卡（汉化容忍：标题打分 + 序号兜底）
-    if stage_type == "weekday":
-        ent = g.click_card_smart(stage_title, stage_sub, stage_idx)
-        if not ent:
-            short = g.shortage_text()
-            if short:
-                log(f"  [{idx}] ⚠ 提示：{short}")
-                okb = g.find_by_handler("ConfirmOK")
-                if okb:
-                    g.click(okb[0], "关闭提示")
-                    g.page.wait_for_timeout(1500)
-                return "shortage"
-            log(f"  [{idx}] 进入关卡失败 screens={g.screens()}")
-            g.shot(f"err{idx}_enter")
-            return "failed"
-    else:
-        ent = g.click_card_smart(stage_title, stage_sub, stage_idx)
-        if ent == "shortage":
-            log(f"  [{idx}] ⚠ 道具/资源不足（进关卡阶段）")
-            g.shot(f"shortage_enter{idx}")
+    ent = g.click_card_smart(stage_title, stage_sub, stage_idx)
+    if ent == "shortage":
+        log(f"  [{idx}] ⚠ 道具/资源不足（进关卡阶段）")
+        g.shot(f"shortage_enter{idx}")
+        return "shortage"
+    if not ent:
+        short = g.shortage_text()
+        if short:
+            log(f"  [{idx}] ⚠ 提示：{short}")
+            okb = g.find_by_handler("ConfirmOK")
+            if okb:
+                g.click(okb[0], "关闭提示")
+                g.page.wait_for_timeout(1500)
             return "shortage"
-        if not ent:
-            log(f"  [{idx}] 进关卡失败 screens={g.screens()}")
-            g.shot(f"err{idx}_enter")
-            return "failed"
+        n = g.last_card_count()
+        if n == 0:
+            log(f"  [{idx}] 列表里没有卡片（这一话可能还没有可打的战场）screens={g.screens()}")
+            return "no_cards"
+        log(f"  [{idx}] 进关卡失败（列表 {n} 张卡，点了没进编队）screens={g.screens()}")
+        g.shot(f"err{idx}_enter")
+        return "click_dead"
 
     log(f"  [{idx}] 已进编队")
     if stopped():
