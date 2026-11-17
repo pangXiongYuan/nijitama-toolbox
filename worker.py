@@ -23,7 +23,6 @@ import traceback
 
 from PySide6.QtCore import QThread, Signal
 
-import _bootstrap  # noqa: F401
 from playwright.sync_api import sync_playwright
 
 import farmcore

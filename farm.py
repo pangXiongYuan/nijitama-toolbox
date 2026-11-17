@@ -19,8 +19,6 @@ import argparse
 import sys
 import time
 
-import _bootstrap  # noqa: F401
-
 from playwright.sync_api import sync_playwright
 
 sys.stdout.reconfigure(encoding="utf-8")

@@ -12,8 +12,6 @@ import subprocess
 import sys
 import time
 
-import _bootstrap  # noqa: F401
-
 from PySide6.QtCore import QByteArray, QRectF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QIcon, QLinearGradient, QPainter,
                            QPainterPath, QPixmap, QTextCursor)

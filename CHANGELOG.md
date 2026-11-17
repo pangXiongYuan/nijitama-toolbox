@@ -7,6 +7,15 @@
 
 ---
 
+## 1.8.9 — 2026-11-17
+
+### 变更
+- **删掉 `_bootstrap.py`**：那是给微软商店版 Python 找 playwright 用的兜底，
+  现在换成了 `E:\Apps\Python313`，商店版已经卸掉了，它每次启动都空跑一遍
+  （还会把 `PYTHONPATH` 的第一项塞进 `sys.path`）。app / worker / farm 里的 import 一并去掉。
+- 开发环境换成 CPython 3.13.17 + PySide6 6.12.0 + PyInstaller 6.22.3，重新打包装过一次。
+
+---
 ## 1.8.8 — 2026-11-16
 
 ### 变更
