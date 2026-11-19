@@ -535,6 +535,18 @@ QComboBox QAbstractItemView {
   color: #e3e6ea; outline: none;
 }
 
+/* 右键菜单：日志框、输入框的「复制/全选」都用 QMenu，不给样式就是系统白底 */
+QMenu {
+  background: #23252a; border: 1px solid #34383f; border-radius: 8px;
+  padding: 4px; color: #e3e6ea;
+}
+QMenu::item {
+  padding: 5px 24px 5px 18px; border-radius: 5px; background: transparent;
+}
+QMenu::item:selected { background: #2b3f6e; color: #ffffff; }
+QMenu::item:disabled { color: #6d727b; }
+QMenu::separator { height: 1px; background: #34383f; margin: 4px 10px; }
+
 QListWidget {
   background: #1e2024; border: 1px solid #32353c; border-radius: 7px;
   color: #e3e6ea; padding: 4px; outline: none;
@@ -1852,6 +1864,8 @@ class MainWindow(QMainWindow):
         """
         每天提醒一次：曜日任務的关卡列表还没读。
         不再自动静默读取，改成弹窗问用户。
+        跨天时会先把上一游戏日读到的列表和勾选清掉——曜日任务每天轮换，
+        旧关卡今天点不到，留着会让刷本一直撞「点不动」。
         """
         today = game_day()
         if config.get_entry(self.cfg, "weekday").get("day") == today:
@@ -1859,7 +1873,22 @@ class MainWindow(QMainWindow):
         if self.cfg.get("weekday_remind_day") == today:
             return                      # 今天已经提醒过了
         if self.worker and self.worker.isRunning():
-            return                      # 正在刷本，别打扰
+            return                      # 正在刷本，别打扰（也先别清界面）
+
+        # 跨天：旧列表和旧勾选都作废。放在 isRunning 之后，免得刷本中界面被清空
+        wk = config.get_entry(self.cfg, "weekday")
+        old_day = wk.get("day") or ""
+        if old_day and old_day != today:
+            had = len(wk.get("stages") or []), len(wk.get("selected") or [])
+            wk["stages"] = []
+            wk["selected"] = []
+            wk["day"] = ""              # 空 = 今天还没读
+            config.save(self.cfg)
+            self.append_log(f">>> 游戏日变了（{old_day} → {today}），"
+                            f"曜日任務列表和勾选已清空（旧：{had[0]} 关 / 勾了 {had[1]} 个）")
+            if self._entry_key() == "weekday":
+                self._fill_stages()
+                self._fill_plan()
 
         # 记下"今天提醒过"，避免每次启动都弹
         self.cfg["weekday_remind_day"] = today
@@ -2299,6 +2328,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("にじたま 工具箱")
+    # 全局也挂一份：右键菜单这类弹窗的 parent 可能是空，只靠窗口样式管不到
+    app.setStyleSheet(QSS)
     sessionlog.write(f"=== 启动 {APP_NAME} v{VERSION} ===",
                      paths.DATA_DIR / "session.log")
     ic = app_icon()

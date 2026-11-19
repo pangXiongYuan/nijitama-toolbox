@@ -26,6 +26,7 @@ from PySide6.QtCore import QThread, Signal
 from playwright.sync_api import sync_playwright
 
 import farmcore
+import gamebot
 from gamebot import PROFILE, Game, attach, spawn_chrome, wait_port
 
 _KEEP = []  # 保活容器
