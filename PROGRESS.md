@@ -1,4 +1,4 @@
-﻿# にじたま 工具箱 —— 项目交接文档
+# にじたま 工具箱 —— 项目交接文档
 
 > 给「重新开始一个会话的 AI」看。
 > 最后更新：2026-11-21，版本 **1.8.14**
@@ -381,8 +381,18 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 
 ## 十二、交接状态（2026-11-17）
 
-**当前**：版本 **1.8.14**（源码已改，**未打包、未提交**；线上最新 Release 是 v1.8.11）。
-`dist/nijitama-toolbox/` 是 1.8.11 在 3.13 下打的包，**没有 1.8.12/1.8.13 的修复**，别拿它试。
+**当前**：版本 **1.8.14**，**已发版**——Release v1.8.14 已上线，两个包都传好了。
+`dist/nijitama-toolbox-v1.8.14-{full,update}.zip` 就是这次传上去的那两个包。
+
+⚠ **本地仓库和远端分叉了**：这台机器上 `git` 连 `github.com` 被 DNS 污染
+（解析到 `20.6.7.17` 然后 connection reset；`curl.exe` 反而能通），这次是用 GitHub API 推的。
+远端 main = `607c1dc`，内容与本地 `4105509` 完全一样。网络正常之后执行
+`git fetch origin && git reset --hard origin/main` 对齐，本地那个 tag 也已删掉（远端 tag 在 `607c1dc`）。
+
+**发版通道备忘（这台机器专用）**：
+- `api.github.com` → `--resolve ...:140.82.112.6` 可用
+- `uploads.github.com` → **只有** `20.205.243.161` 能传，`140.82.113.6` 会返回 `404 Not Found`
+- token 在凭据管理器「GitHub - https://api.github.com/pangXiongYuan」，blob 是 **UTF-8**，40 字符（`gho_` 开头）
 
 **这轮改了什么（1.6.5 → 1.8.14）**
 
