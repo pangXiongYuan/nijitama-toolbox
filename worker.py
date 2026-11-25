@@ -447,6 +447,11 @@ class BotWorker(QThread):
                         self.sig_done.emit("恢复失败，已停止", done)
                         return
                     continue
+                elif st == "wounded":
+                    self.sig_done.emit(
+                        "出阵条件不满足：队伍里有角色负伤（游戏里会显示「安房(負傷中)」这种）。\n"
+                        "先去游戏里治疗，治好了再点「开始刷本」。", done)
+                    return
                 elif st == "shortage":
                     self.sig_done.emit("道具/资源不足，已停止", done)
                     return

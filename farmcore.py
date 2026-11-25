@@ -33,6 +33,7 @@ def run_once(g, idx: int, stage, log, stop_check=None, entry="junreki",
     跑一次副本。stage = {"title": ..., "sub": ..., "idx": ...}
     返回 'ok' / 'failed' / 'shortage' / 'retry' / 'stopped' / 'paused'
          / 'no_cards'（列表里没有可打的关卡）/ 'click_dead'（有卡片但点了进不去）
+         / 'wounded'（出阵条件不满足，多半是有角色负伤）
     """
     stage = stage or {}
     stage_title = str(stage.get("title", ""))
@@ -51,6 +52,10 @@ def run_once(g, idx: int, stage, log, stop_check=None, entry="junreki",
 
     # 1) 进入关卡（汉化容忍：标题打分 + 序号兜底）
     ent = g.click_card_smart(stage_title, stage_sub, stage_idx)
+    if ent == "wounded":
+        log(f"  [{idx}] ✗ 出阵条件不满足（队伍里有角色负伤？）")
+        g.shot(f"wounded_enter{idx}")
+        return "wounded"
     if ent == "shortage":
         log(f"  [{idx}] ⚠ 道具/资源不足（进关卡阶段）")
         g.shot(f"shortage_enter{idx}")
@@ -82,6 +87,10 @@ def run_once(g, idx: int, stage, log, stop_check=None, entry="junreki",
 
     # 2) 出阵
     sb = g.start_battle()
+    if sb == "wounded":
+        log(f"  [{idx}] ✗ 出阵条件不满足，无法出阵（多半是有角色负伤）")
+        g.shot(f"wounded{idx}")
+        return "wounded"
     if sb == "shortage":
         log(f"  [{idx}] ⚠ 道具/资源不足，无法出阵")
         g.shot(f"shortage{idx}")

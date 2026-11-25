@@ -1,7 +1,7 @@
-# にじたま 工具箱 —— 项目交接文档
+﻿# にじたま 工具箱 —— 项目交接文档
 
 > 给「重新开始一个会话的 AI」看。
-> 最后更新：2026-11-19，版本 **1.8.11**
+> 最后更新：2026-11-21，版本 **1.8.14**
 > 新会话请先读完这份 + `CHANGELOG.md`，就能直接接手。
 
 ---
@@ -60,7 +60,7 @@ nijitama-farm/
 
 ---
 
-## 三、当前功能（v1.8.11）
+## 三、当前功能（v1.8.14）
 
 | 模块 | 说明 |
 |---|---|
@@ -244,6 +244,8 @@ Cocos 的逻辑全挂在 rAF 上，于是一起冻住。
 | 22 | 一点「读取」就 `name 'gamebot' is not defined` | `worker.py` 只写了 `from gamebot import PROFILE, Game, ...`，却在日志里用 `gamebot.ENTRY_NAME`。1.7.0 加了那两行文案，1.8.10 才补上 `import gamebot`。**改了 import 要顺手搜一遍模块名用法** |
 | 23 | 日志框右键菜单是白底 | QMenu 是独立弹窗，样式表里没写规则就是系统默认色；而且它的 parent 可能是空的，只挂窗口样式管不到。要给 `QMenu` 写规则 + `QApplication.setStyleSheet(QSS)` |
 | 24 | 曜日任務的列表和勾选跨天不清 | `_maybe_remind_weekday` 只弹窗、从没清过；`weekday.day` 写进去没人比对。曜日按天轮换，旧关卡点不到 → 一直撞「点不动」。跨天时清 `stages`/`selected`、`day` 置空 |
+| 25 | 勾第 2 关后计划区只显示左边一半 | `QScrollArea` 不因内部重建重算 `sizeHint`，宽度停在 228；`widgetResizable` 把两块压成 105。`_fill_plan` 里按第一排方块自己算宽度设 `setMinimumWidth`（**不能读 `chip_lay.sizeHint()`，addWidget 后还没重算**） |
+| 26 | 角色负伤时反复重载游戏 | 弹窗「出陣の条件が整っていません / 安房(負傷中)」不匹配 `shortage_text()` 的词表（`整っていません` 是「いません」）；`start_battle` 干等 6 次 → 判卡死 → 重载。1.8.13 加 `blocked_text()` 认这句话，返回 `"wounded"` 让上层停手 |
 
 ---
 
@@ -337,6 +339,7 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 | 限制 | 说明 |
 |---|---|
 | 战斗中无法中断 | 暂停只是脚本停手，游戏里那场要等它打完 |
+| 角色负伤不能出阵 | 游戏会弹「出陣の条件が整っていません」；1.8.13 起脚本认这句并停手提示（1.8.14 又加固了一轮），但不会自己去治疗，得手动治 |
 | 窗口最小化会停 | 被判成真 hidden，启动参数救不回来；挂着刷时别最小化，露一条边也行 |
 | 同账号不能双开 | bot 和手动浏览器共用 profile |
 | 打包版不自动更新 | 改代码要重新打包，源码版才实时 |
@@ -378,10 +381,10 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 
 ## 十二、交接状态（2026-11-17）
 
-**当前**：版本 **1.8.11**（源码已改，**未打包、未提交**；线上最新 Release 还是 v1.8.9）。
-`dist/nijitama-toolbox/` 是 1.8.9 在 3.13 下打的包，**没有 1.8.10/1.8.11 的修复**，别拿它试。
+**当前**：版本 **1.8.14**（源码已改，**未打包、未提交**；线上最新 Release 是 v1.8.11）。
+`dist/nijitama-toolbox/` 是 1.8.11 在 3.13 下打的包，**没有 1.8.12/1.8.13 的修复**，别拿它试。
 
-**这轮改了什么（1.6.5 → 1.8.11）**
+**这轮改了什么（1.6.5 → 1.8.14）**
 
 - 1.6.5：输入卡死自救（`release_mouse` / `frame_alive` / 点不动就重载一次）
 - 1.7.0：副本改成「入口 → 话 → 关卡」三层，**关卡列表改为从游戏里读**，配置迁到 v2
@@ -392,8 +395,17 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
   QMenu 补深色样式并把 QSS 挂到 `QApplication`
 - 1.8.11：曜日任務的列表和勾选跨天自动清空（`_maybe_remind_weekday` 里补的，
   放在「是否正在刷本」判断之后，清完照旧弹提醒）
+- 1.8.12：计划区宽度跟着方块数长开（`_fill_plan` 里按第一排方块算最小宽度，
+  读 `chip_lay.sizeHint()` 会拿到旧值，得自己算）
+- 1.8.13：认出「出陣の条件が整っていません / 負傷中」，负伤时停手提示
+  （`gamebot.blocked_text()` + 新状态 `"wounded"`，farmcore 透传、worker 停手）
+- 1.8.14：1.8.13 真机没生效（三次出阵全空、没有「拦下」日志）→ 点完出阵改成
+  每 400ms 查一次连查 3.2 秒（弹窗可能一闪而过）、扫描范围从 `Canvas/UI` 放到整个场景、
+  Label + RichText 都读、词表加「受傷/受伤/整いません/出阵条件不足」；
+  三次都没开打时额外打印 `visible_texts()`（界面所有文字），方便下次直接对结构
 - 顺手修掉的坑：#18 输入卡死、#19 `firstMenuBtn` 是回主菜单、#20 汉化后硬编码标题对不上、
-  #21 列表选中会自动滚动、#22 worker 里漏 import、#23 QMenu 白底、#24 曜日跨天不清；
+  #21 列表选中会自动滚动、#22 worker 里漏 import、#23 QMenu 白底、#24 曜日跨天不清、
+  #25 计划区宽度不跟着长、#26 负伤弹窗被当成卡死；
   `boot(reuse=True)` 不再把商店/澡堂当成「不在游戏里」而重载页面
 
 **怎么快速看效果**：桌面快捷方式「にじたま 工具箱」（`D:\Deskstop\`）跑的是**源码**
@@ -401,9 +413,11 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 `启动源码版（免打包）.lnk`。两个指向的 `pythonw.exe` 在 2026-11-17 换成了
 `E:\Apps\Python313\pythonw.exe`（原来指商店版，卸掉后点不开）。**不要**用 `dist/` 里的 exe 试新界面。
 
-**下一轮接着做**：等他试 1.8.11——跨天那条得等真的过了 23:00 才看得到，
-想现在就验的话，把 `data/config.json` 里 `entries.weekday.day` 改成昨天的日期，
-重启工具箱就会走「清空 + 提醒」这条路。
+**下一轮接着做**：等他拿 1.8.14 再试一次负伤场景。如果日志出现「⚠ 出阵被拦下」就说明对了；
+如果还是三次全空，末尾那行 `!! 出阵一直没开打，界面文字：…` 就是弹窗的真实文案与节点名，
+照着它改 `blocked_text()` 的词表或解析方式。
+1.8.11 那条跨天清空得等真的过了 23:00 才看得到，想现在验就把
+`data/config.json` 里 `entries.weekday.day` 改成昨天的日期再重启。
 
 **最近几版做了什么**
 
@@ -433,6 +447,9 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 | 1.8.9 | 删掉 `_bootstrap.py`（商店版 Python 的兜底）；开发环境换到 Python 3.13 并重打验证 |
 | 1.8.10 | 修 `worker.py` 漏 `import gamebot` 导致「读取话列表」报 NameError；QMenu 补深色样式并挂到 QApplication |
 | 1.8.11 | 曜日任務列表和勾选跨天自动清空（`_maybe_remind_weekday` 里补的）|
+| 1.8.12 | 计划区宽度跟着方块数长开（勾第 2 关不再被压成半块）|
+| 1.8.13 | 认出「出陣の条件が整っていません / 負傷中」→ 停手提示，不再误判卡死重载 |
+| 1.8.14 | 负伤提示再修：扫整场景 + Label/RichText + 连查 3.2 秒；出阵失败打印界面文字 |
 
 **环境**：CPython **3.13.17**（`E:\Apps\Python313\python.exe`）、PySide6 6.12.0、
 playwright 1.64.1、PyInstaller 6.22.3。原商店版 Python 3.11.9 已于 2026-11-17 卸载，

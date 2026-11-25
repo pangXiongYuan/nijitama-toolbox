@@ -1596,6 +1596,18 @@ class MainWindow(QMainWindow):
             self._plan_pad.setVisible(has)
             # 左边空出「关卡」标签那么宽，跟上面的列表对齐
             self._plan_pad.setFixedWidth(self.lbl_stage_tag.sizeHint().width())
+            # 宽度要跟着方块数长：QScrollArea 不会因为内部重建就重算 sizeHint，
+            # 不显式设最小宽度的话它一直停在「一块方块」的宽度，第二块只能露个边
+            # （1.8.11 之前就是这样，勾第 2 关时两块被压成一半宽）
+            if has:
+                # 不能读 chip_lay.sizeHint()：刚 addWidget 完它还没重算，会拿到旧值
+                first_row = self._chips[:2]
+                need = 12 + sum(ch.sizeHint().width() for ch in first_row) \
+                    + 6 * (len(first_row) - 1)
+                self.plan_scroll.setMinimumWidth(min(560, need))
+            else:
+                self.plan_scroll.setMinimumWidth(0)
+            self.plan_scroll.updateGeometry()
             self.plan_scroll.setToolTip(
                 "顺序跟关卡列表走，去【设置】里切回「按勾选先后」才能拖"
                 if locked else "按住方块拖到另一关上，两关直接对调序号，✕ 取消这一关")

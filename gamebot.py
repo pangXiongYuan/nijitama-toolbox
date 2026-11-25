@@ -1690,7 +1690,16 @@ class Game:
                 return True
             self.page.wait_for_timeout(1000)
 
-        # 没进编队：可能是资源不足弹窗
+        # 没进编队：可能是「出阵条件不满足」（负伤），也可能是资源不足
+        block = self.blocked_text()
+        if block:
+            self.log(f"      ⚠ 出阵被拦下：{block}")
+            okb = self.find_by_handler("ConfirmOK")
+            if okb:
+                self.click(okb[0], "关闭提示")
+                self.page.wait_for_timeout(1500)
+            return "wounded"
+
         short = self.shortage_text()
         if short:
             self.log(f"      ⚠ 进关卡时资源不足: {short}")
@@ -1738,6 +1747,84 @@ class Game:
         except Exception:
             return ""
 
+    def blocked_text(self):
+        """
+        检测「出阵条件不满足」类提示：最典型的是有角色负伤——
+        弹窗写「出陣の条件が整っていません / 安房(負傷中)」。
+        这类弹窗不吃 shortage_text 的词表（整っていません 是「いません」不是「ありません」），
+        以前探不到，被当成「点了没反应」一路重载。
+
+        扫的是整个场景（不只 Canvas/UI），Label 和 RichText 都看——
+        弹窗可能挂在别的层上，汉化脚本也可能把字换成「受伤」之类。
+        """
+        try:
+            return self.js(r"""() => {
+              const root = cc.director.getScene();
+              const hits = [];
+              const keys = ['整っていません', '整いません', '負傷', '负伤', '受傷', '受伤',
+                            '出陣できません', '出陣の条件', '出阵条件', '出阵条件不足'];
+              const walk = (n, d) => {
+                if (!n || d > 20) return;
+                try {
+                  if (n.activeInHierarchy) {
+                    const l = n.getComponent(cc.Label);
+                    let s = (l && l.string) ? String(l.string) : '';
+                    if (!s) {
+                      const r = n.getComponent(cc.RichText);
+                      if (r && r.string) s = String(r.string).replace(/<[^>]*>/g, '');
+                    }
+                    if (s) {
+                      for (const k of keys) {
+                        if (s.indexOf(k) >= 0) { hits.push(s); break; }
+                      }
+                    }
+                  }
+                } catch (e) {}
+                if (n.children) for (const c of n.children) walk(c, d + 1);
+              };
+              walk(root, 0);
+              return hits.slice(0, 5).join(' / ');
+            }""")
+        except Exception:
+            return ""
+
+    def visible_texts(self, limit=18):
+        """把当前界面上能看到的所有文字拼一行，出问题时写进日志方便对结构"""
+        try:
+            return self.js(r"""(limit) => {
+              const root = cc.director.getScene();
+              const out = [];
+              const walk = (n, d) => {
+                if (!n || d > 20 || out.length >= limit) return;
+                try {
+                  if (n.activeInHierarchy) {
+                    const l = n.getComponent(cc.Label);
+                    let s = (l && l.string) ? String(l.string) : '';
+                    if (!s) {
+                      const r = n.getComponent(cc.RichText);
+                      if (r && r.string) s = String(r.string);
+                    }
+                    s = s.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+                    if (s) out.push(n.name + '=' + s.slice(0, 40));
+                  }
+                } catch (e) {}
+                if (n.children) for (const c of n.children) walk(c, d + 1);
+              };
+              walk(root, 0);
+              return out.join(' | ');
+            }""", limit)
+        except Exception:
+            return ""
+
+    def _dismiss_hint(self):
+        """点掉当前提示框（负伤/资源不足这类）"""
+        okb = self.find_by_handler("ConfirmOK")
+        if okb:
+            self.click(okb[0], "关闭提示")
+        else:
+            self.call("Buttons", "ConfirmOK")
+        self.page.wait_for_timeout(1200)
+
     def start_battle(self):
         """Team 界面点出阵（handler+真实点击双保险，并校验是否开打）"""
         # 注意：不做任何「强制跳转」类清理！战斗/结算进行中绝不能干预。
@@ -1754,7 +1841,17 @@ class Game:
             # handler + 真实点击
             self.press(P_TEAM_START)
             self.click(P_TEAM_START, f"出阵#{attempt}")
-            self.page.wait_for_timeout(2500)
+            # 负伤提示可能一闪而过（点了出阵才弹、弹完自己关），所以连查几秒
+            block = ""
+            for _ in range(8):
+                self.page.wait_for_timeout(400)
+                block = self.blocked_text()
+                if block:
+                    break
+            if block:
+                self.log(f"      ⚠ 出阵被拦下：{block}")
+                self._dismiss_hint()
+                return "wounded"
 
             if self.ui_active("ConfirmGamen") or self.find_by_handler("ConfirmOK"):
                 self.log("      确认弹窗 -> OK")
@@ -1766,19 +1863,23 @@ class Game:
                     return True
                 self.page.wait_for_timeout(2000)
 
-            # 检查是不是资源不足
+            # 检查是不是「出阵条件不满足」（负伤等），再查资源不足
+            block = self.blocked_text()
+            if block:
+                self.log(f"      ⚠ 出阵被拦下：{block}")
+                self._dismiss_hint()
+                return "wounded"
+
             short = self.shortage_text()
             if short:
                 self.log(f"      ⚠ 疑似资源不足: {short}")
-                # 关掉提示框
-                okb = self.find_by_handler("ConfirmOK")
-                if okb:
-                    self.click(okb[0], "关闭提示")
-                    self.page.wait_for_timeout(1500)
+                self._dismiss_hint()
                 return "shortage"
 
             self.log(f"      第 {attempt} 次出阵后战斗未开始，screens={self.screens()}")
 
+        # 三次都没开打：把界面文字写进日志，下次能直接看弹窗到底写了什么
+        self.log(f"      !! 出阵一直没开打，界面文字：{self.visible_texts()}")
         return False
 
     def progress(self):
